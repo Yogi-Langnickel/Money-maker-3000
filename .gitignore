@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+.env
+.env.*
+*.log
+*.jsonl
+data/
+coverage/
+.nyc_output/
+.npm/
+tmp/
+temp/

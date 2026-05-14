@@ -19,6 +19,13 @@ npm run start
 npm run check
 ```
 
+## Synthetic Backtest
+
+`src/backtest.mjs` produces deterministic simulation diagnostics over the
+existing strategy registry. It does not call providers, does not calculate real
+PnL, and keeps every decision skipped/blocked until a later reviewed provider
+mode exists.
+
 ## Current Scope
 
 - Predefined strategy registry only.
@@ -26,6 +33,7 @@ npm run check
 - Low-frequency scheduling guardrails.
 - Synthetic portfolio/news context.
 - Redacted simulation trade log.
+- Synthetic backtest/performance summary for veto and warning coverage.
 - No provider calls, no execution routes, no live trading.
 
 ## Safety Defaults

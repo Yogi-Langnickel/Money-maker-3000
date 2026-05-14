@@ -28,6 +28,18 @@ private provider state.
 The ledger is a simulation audit trail, not an execution log. Provider calls,
 demo trading, and live trading remain blocked.
 
+## Synthetic Backtest/Performance Summary
+
+The first performance review path is synthetic diagnostics, not trading
+performance. `src/backtest.mjs` runs deterministic scenarios through the
+existing simulation contracts and summarizes run count, skipped decisions,
+blocked risk results, veto frequency, warning frequency, and budget ranges.
+
+This gives a stable way to review strategy coverage, config warnings, and
+guardrail pressure before provider adapters exist. It must not report real PnL,
+win rate, Sharpe ratio, drawdown, or execution quality until market history,
+portfolio state, and reconciliation inputs are designed and reviewed.
+
 ## Configuration Validation
 
 Strategy configuration is validated before each simulation run. Valid
