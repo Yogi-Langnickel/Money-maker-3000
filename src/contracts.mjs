@@ -1,3 +1,5 @@
+import { DEFAULT_SIMULATION_CONFIG, validateSimulationConfig } from "./config.mjs";
+
 export const DEFAULT_BUDGET_POLICY = Object.freeze({
   baseBudgetUsd: 1000,
   selectableBudgetsUsd: Object.freeze([500, 1000, 1500, 2500]),
@@ -126,10 +128,22 @@ export function buildSimulationRun({
   now = new Date("2026-05-14T00:00:00.000Z"),
   budgetPolicy = DEFAULT_BUDGET_POLICY,
   schedulePolicy = DEFAULT_SCHEDULE_POLICY,
+  simulationConfig,
 } = {}) {
-  const strategy = strategyById(strategyId);
+  const effectiveSimulationConfig = {
+    ...DEFAULT_SIMULATION_CONFIG,
+    ...simulationConfig,
+    strategyId: simulationConfig?.strategyId ?? strategyId,
+  };
+  const effectiveStrategyId = effectiveSimulationConfig.strategyId;
+  const strategy = strategyById(effectiveStrategyId);
   const budgetValidation = validateBudgetPolicy(budgetPolicy);
   const scheduleValidation = validateSchedulePolicy(schedulePolicy);
+  const configValidation = validateSimulationConfig(effectiveSimulationConfig, {
+    strategyRegistry: STRATEGY_REGISTRY,
+    budgetPolicy,
+    schedulePolicy,
+  });
   const vetoes = [];
 
   if (!strategy) {
@@ -144,11 +158,15 @@ export function buildSimulationRun({
     vetoes.push("invalid-schedule-policy");
   }
 
+  if (!configValidation.ok) {
+    vetoes.push("invalid-simulation-config");
+  }
+
   vetoes.push("provider-not-connected", "execution-route-absent");
 
   return {
     runId: `sim-${now.toISOString()}`,
-    strategyId: strategy?.strategyId ?? strategyId,
+    strategyId: strategy?.strategyId ?? effectiveStrategyId,
     strategyVersion: strategy?.version ?? "unknown",
     mode: "simulation",
     environment: "synthetic",
@@ -157,21 +175,34 @@ export function buildSimulationRun({
     riskResult: "blocked",
     vetoes,
     schedulePolicy,
+    simulationConfig: {
+      strategyId: effectiveStrategyId,
+      budgetUsd: effectiveSimulationConfig.budgetUsd,
+      allowedMarkets: effectiveSimulationConfig.allowedMarkets,
+      allowedInstrumentClasses: effectiveSimulationConfig.allowedInstrumentClasses,
+      cadence: effectiveSimulationConfig.cadence,
+      execution: effectiveSimulationConfig.execution,
+    },
+    configValidation,
     budget: {
       allocatedUsd: 0,
-      remainingUsd: budgetPolicy.baseBudgetUsd,
+      remainingUsd: effectiveSimulationConfig.budgetUsd ?? budgetPolicy.baseBudgetUsd,
       maxConfigurableBudgetUsd: budgetPolicy.maxConfigurableBudgetUsd,
     },
     positionContext: SYNTHETIC_POSITION_CONTEXT,
     tradeLogEntry: {
       tradeLogId: `trade-log-${now.getTime()}`,
       action: "simulated-skip",
-      strategyId: strategy?.strategyId ?? strategyId,
+      strategyId: strategy?.strategyId ?? effectiveStrategyId,
       decision: "blocked",
       reasonCode: vetoes[0],
-      budgetRemainingUsd: budgetPolicy.baseBudgetUsd,
+      budgetRemainingUsd: effectiveSimulationConfig.budgetUsd ?? budgetPolicy.baseBudgetUsd,
       accountIdentifiers: "redacted",
       rawProviderPayloads: "absent",
+      providerCall: "not-attempted",
+      executionRoute: "absent",
     },
   };
 }
+
+export { DEFAULT_SIMULATION_CONFIG, validateSimulationConfig };
