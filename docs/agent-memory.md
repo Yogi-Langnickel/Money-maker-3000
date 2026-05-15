@@ -13,6 +13,10 @@ Created: 2026-05-15
 - The predefined strategy registry is contract-validated for unique IDs,
   simulation-safe statuses, low-frequency cadence, and instrument metadata
   before run DTOs are returned.
+- `src/simulation-contract.mjs` owns the canonical simulation config mirror
+  shape for dashboard consumers: market groups are `US_EQUITIES`,
+  `AU_EQUITIES`, `FOREX`, and `COMMODITIES`; selected config must satisfy the
+  chosen strategy's allowed markets, allowed instrument classes, and cadence.
 - Current performance diagnostics are synthetic only: run counts, skipped and
   blocked decisions, veto histograms, warning histograms, and budget ranges.
 - Provider readiness metadata is metadata-only and explicitly blocks provider

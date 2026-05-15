@@ -29,6 +29,8 @@ mode exists.
 ## Current Scope
 
 - Predefined strategy registry only.
+- Canonical simulation contract in `src/simulation-contract.mjs`, using market
+  groups `US_EQUITIES`, `AU_EQUITIES`, `FOREX`, and `COMMODITIES`.
 - USD budget limits and loss stops.
 - Low-frequency scheduling guardrails.
 - Synthetic portfolio/news context.

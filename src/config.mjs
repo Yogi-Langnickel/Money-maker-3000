@@ -1,35 +1,15 @@
-export const ALLOWED_MARKETS = Object.freeze(["US", "AU"]);
+import {
+  BLOCKED_SIMULATION_INSTRUMENT_CLASSES,
+  DEFAULT_SIMULATION_CONFIG,
+  SIMULATION_INSTRUMENT_CLASSES,
+  SIMULATION_MARKET_INSTRUMENT_CLASS_RULES,
+  SIMULATION_MARKETS,
+} from "./simulation-contract.mjs";
 
-export const ALLOWED_INSTRUMENT_CLASSES = Object.freeze(["EQUITY", "ETF", "COMMODITY"]);
-
-export const BLOCKED_INSTRUMENT_CLASSES = Object.freeze([
-  "CFD",
-  "CRYPTO",
-  "DERIVATIVE",
-  "FOREX",
-  "OPTION",
-]);
-
-export const DEFAULT_SIMULATION_CONFIG = Object.freeze({
-  strategyId: "dca-cash-reserve",
-  budgetUsd: 1000,
-  allowedMarkets: Object.freeze(["US", "AU"]),
-  allowedInstrumentClasses: Object.freeze(["EQUITY", "ETF"]),
-  cadence: Object.freeze({
-    mode: "low-frequency-only",
-    minimumEvaluationIntervalMinutes: 240,
-    maxDecisionsPerDay: 3,
-  }),
-  execution: Object.freeze({
-    mode: "simulation-only",
-    liveTrading: "blocked",
-    demoTrading: "blocked",
-    providerCalls: "blocked",
-    leverage: 1,
-    shorts: "blocked",
-    copyTrading: "blocked",
-  }),
-});
+export const ALLOWED_MARKETS = SIMULATION_MARKETS;
+export const ALLOWED_INSTRUMENT_CLASSES = SIMULATION_INSTRUMENT_CLASSES;
+export const BLOCKED_INSTRUMENT_CLASSES = BLOCKED_SIMULATION_INSTRUMENT_CLASSES;
+export { DEFAULT_SIMULATION_CONFIG };
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -41,6 +21,26 @@ function listUnknownValues(values, allowedValues) {
   }
 
   return values.filter((value) => !allowedValues.includes(value));
+}
+
+function listStrategyBlockedValues(values, allowedValues) {
+  if (!Array.isArray(values) || !Array.isArray(allowedValues)) {
+    return [];
+  }
+
+  return values.filter((value) => !allowedValues.includes(value));
+}
+
+function listMarketInstrumentClassMismatches(allowedMarkets, allowedInstrumentClasses) {
+  if (!Array.isArray(allowedMarkets) || !Array.isArray(allowedInstrumentClasses)) {
+    return [];
+  }
+
+  const marketAllowedClasses = new Set(
+    allowedMarkets.flatMap((market) => SIMULATION_MARKET_INSTRUMENT_CLASS_RULES[market] ?? []),
+  );
+
+  return allowedInstrumentClasses.filter((instrumentClass) => !marketAllowedClasses.has(instrumentClass));
 }
 
 export function validateSimulationConfig(
@@ -110,11 +110,44 @@ export function validateSimulationConfig(
     errors.push(`blocked instrument classes configured: ${blockedInstrumentClasses.join(", ")}`);
   }
 
+  const marketInstrumentClassMismatches = listMarketInstrumentClassMismatches(
+    config.allowedMarkets,
+    config.allowedInstrumentClasses,
+  );
+  if (marketInstrumentClassMismatches.length > 0) {
+    errors.push(
+      `instrument classes not supported by selected markets: ${marketInstrumentClassMismatches.join(", ")}`,
+    );
+  }
+
+  const strategyBlockedMarkets = listStrategyBlockedValues(config.allowedMarkets, strategy?.allowedMarkets);
+  if (strategyBlockedMarkets.length > 0) {
+    errors.push(
+      `allowed markets are not allowed for ${strategy.strategyId}: ${strategyBlockedMarkets.join(", ")}`,
+    );
+  }
+
+  const strategyBlockedInstrumentClasses = listStrategyBlockedValues(
+    config.allowedInstrumentClasses,
+    strategy?.allowedInstrumentClasses,
+  );
+  if (strategyBlockedInstrumentClasses.length > 0) {
+    errors.push(
+      `allowed instrument classes are not allowed for ${strategy.strategyId}: ${strategyBlockedInstrumentClasses.join(", ")}`,
+    );
+  }
+
   if (!isPlainObject(config.cadence)) {
     errors.push("cadence policy is required");
   } else {
     if (config.cadence.mode !== "low-frequency-only") {
       errors.push("cadence mode must remain low-frequency-only");
+    }
+
+    if (!config.cadence.frequency || typeof config.cadence.frequency !== "string") {
+      errors.push("cadence frequency is required");
+    } else if (strategy?.cadence && config.cadence.frequency !== strategy.cadence) {
+      errors.push(`cadence frequency is not allowed for ${strategy.strategyId}`);
     }
 
     const minimumInterval = config.cadence.minimumEvaluationIntervalMinutes;

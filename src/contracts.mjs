@@ -1,4 +1,14 @@
-import { DEFAULT_SIMULATION_CONFIG, validateSimulationConfig } from "./config.mjs";
+import {
+  DEFAULT_SIMULATION_CONFIG,
+  SIMULATION_CADENCES,
+  SIMULATION_CONFIG_CONTRACT,
+  SIMULATION_INSTRUMENT_CLASSES,
+  SIMULATION_MARKET_INSTRUMENT_CLASS_RULES,
+  SIMULATION_MARKETS,
+  SIMULATION_STRATEGY_CONFIG_RULES,
+  defaultSimulationConfigForStrategy,
+} from "./simulation-contract.mjs";
+import { validateSimulationConfig } from "./config.mjs";
 import { buildProviderMetadataSnapshot } from "./providers.mjs";
 
 export const DEFAULT_BUDGET_POLICY = Object.freeze({
@@ -22,43 +32,27 @@ export const DEFAULT_SCHEDULE_POLICY = Object.freeze({
 });
 
 const STRATEGY_STATUSES = Object.freeze(["simulation-only", "context-only"]);
-const STRATEGY_CADENCES = Object.freeze(["daily", "weekly"]);
-const STRATEGY_INSTRUMENTS = Object.freeze([
-  "US_EQUITIES",
-  "AU_EQUITIES",
-  "COMMODITIES",
-  "FOREX",
-]);
-const BLOCKED_SIMULATION_STRATEGY_INSTRUMENTS = Object.freeze(["FOREX"]);
+const STRATEGY_CADENCES = SIMULATION_CADENCES;
+const STRATEGY_MARKETS = SIMULATION_MARKETS;
+const STRATEGY_INSTRUMENT_CLASSES = SIMULATION_INSTRUMENT_CLASSES;
+const BLOCKED_SIMULATION_STRATEGY_INSTRUMENT_CLASSES = Object.freeze(["FOREX"]);
 const HIGH_FREQUENCY_HOLDING_PERIOD_PATTERN = /(second|minute|intraday|scalp|high-frequency)/i;
 const STRATEGY_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export const STRATEGY_REGISTRY = Object.freeze([
   Object.freeze({
     strategyId: "dca-cash-reserve",
-    name: "Cash-reserved DCA",
-    version: "0.1.0-sim",
-    status: "simulation-only",
-    cadence: "daily",
-    allowedInstruments: Object.freeze(["US_EQUITIES", "AU_EQUITIES"]),
+    ...SIMULATION_STRATEGY_CONFIG_RULES["dca-cash-reserve"],
     expectedHoldingPeriod: "weeks-to-months",
   }),
   Object.freeze({
     strategyId: "threshold-rebalance",
-    name: "Threshold rebalance",
-    version: "0.1.0-sim",
-    status: "simulation-only",
-    cadence: "weekly",
-    allowedInstruments: Object.freeze(["US_EQUITIES", "AU_EQUITIES", "COMMODITIES"]),
+    ...SIMULATION_STRATEGY_CONFIG_RULES["threshold-rebalance"],
     expectedHoldingPeriod: "weeks-to-months",
   }),
   Object.freeze({
     strategyId: "news-aware-watchlist",
-    name: "News-aware watchlist",
-    version: "0.1.0-plan",
-    status: "context-only",
-    cadence: "daily",
-    allowedInstruments: Object.freeze(["US_EQUITIES", "AU_EQUITIES", "FOREX", "COMMODITIES"]),
+    ...SIMULATION_STRATEGY_CONFIG_RULES["news-aware-watchlist"],
     expectedHoldingPeriod: "not-trading-from-news",
   }),
 ]);
@@ -96,6 +90,14 @@ export function strategyById(strategyId) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function listMarketInstrumentClassMismatches(allowedMarkets, allowedInstrumentClasses) {
+  const marketAllowedClasses = new Set(
+    allowedMarkets.flatMap((market) => SIMULATION_MARKET_INSTRUMENT_CLASS_RULES[market] ?? []),
+  );
+
+  return allowedInstrumentClasses.filter((instrumentClass) => !marketAllowedClasses.has(instrumentClass));
 }
 
 export function validateStrategyRegistry(registry = STRATEGY_REGISTRY) {
@@ -151,22 +153,45 @@ export function validateStrategyRegistry(registry = STRATEGY_REGISTRY) {
       errors.push(`${label} cadence must be low-frequency daily or weekly`);
     }
 
-    if (!Array.isArray(strategy.allowedInstruments) || strategy.allowedInstruments.length === 0) {
-      errors.push(`${label} allowed instruments must be a non-empty list`);
+    if (!Array.isArray(strategy.allowedMarkets) || strategy.allowedMarkets.length === 0) {
+      errors.push(`${label} allowed markets must be a non-empty list`);
     } else {
-      const unknownInstruments = strategy.allowedInstruments.filter(
-        (instrument) => !STRATEGY_INSTRUMENTS.includes(instrument),
+      const unknownMarkets = strategy.allowedMarkets.filter(
+        (market) => !STRATEGY_MARKETS.includes(market),
       );
-      if (unknownInstruments.length > 0) {
-        errors.push(`${label} has unknown instruments: ${unknownInstruments.join(", ")}`);
+      if (unknownMarkets.length > 0) {
+        errors.push(`${label} has unknown markets: ${unknownMarkets.join(", ")}`);
+      }
+    }
+
+    if (!Array.isArray(strategy.allowedInstrumentClasses) || strategy.allowedInstrumentClasses.length === 0) {
+      errors.push(`${label} allowed instrument classes must be a non-empty list`);
+    } else {
+      const unknownInstrumentClasses = strategy.allowedInstrumentClasses.filter(
+        (instrumentClass) => !STRATEGY_INSTRUMENT_CLASSES.includes(instrumentClass),
+      );
+      if (unknownInstrumentClasses.length > 0) {
+        errors.push(`${label} has unknown instrument classes: ${unknownInstrumentClasses.join(", ")}`);
       }
 
-      const blockedSimulationInstruments = strategy.allowedInstruments.filter((instrument) =>
-        BLOCKED_SIMULATION_STRATEGY_INSTRUMENTS.includes(instrument),
+      const blockedSimulationInstrumentClasses = strategy.allowedInstrumentClasses.filter((instrumentClass) =>
+        BLOCKED_SIMULATION_STRATEGY_INSTRUMENT_CLASSES.includes(instrumentClass),
       );
-      if (strategy.status === "simulation-only" && blockedSimulationInstruments.length > 0) {
+      if (strategy.status === "simulation-only" && blockedSimulationInstrumentClasses.length > 0) {
         errors.push(
-          `${label} simulation strategy includes blocked execution instruments: ${blockedSimulationInstruments.join(", ")}`,
+          `${label} simulation strategy includes blocked execution instrument classes: ${blockedSimulationInstrumentClasses.join(", ")}`,
+        );
+      }
+    }
+
+    if (Array.isArray(strategy.allowedMarkets) && Array.isArray(strategy.allowedInstrumentClasses)) {
+      const mismatchedInstrumentClasses = listMarketInstrumentClassMismatches(
+        strategy.allowedMarkets,
+        strategy.allowedInstrumentClasses,
+      );
+      if (mismatchedInstrumentClasses.length > 0) {
+        errors.push(
+          `${label} instrument classes are not supported by its allowed markets: ${mismatchedInstrumentClasses.join(", ")}`,
         );
       }
     }
@@ -233,10 +258,20 @@ export function buildSimulationRun({
   schedulePolicy = DEFAULT_SCHEDULE_POLICY,
   simulationConfig,
 } = {}) {
+  const requestedStrategyId = simulationConfig?.strategyId ?? strategyId;
+  const baseSimulationConfig = defaultSimulationConfigForStrategy(requestedStrategyId);
   const effectiveSimulationConfig = {
-    ...DEFAULT_SIMULATION_CONFIG,
+    ...baseSimulationConfig,
     ...simulationConfig,
-    strategyId: simulationConfig?.strategyId ?? strategyId,
+    strategyId: requestedStrategyId,
+    cadence: {
+      ...baseSimulationConfig.cadence,
+      ...simulationConfig?.cadence,
+    },
+    execution: {
+      ...baseSimulationConfig.execution,
+      ...simulationConfig?.execution,
+    },
   };
   const effectiveStrategyId = effectiveSimulationConfig.strategyId;
   const strategy = strategyById(effectiveStrategyId);
@@ -315,4 +350,9 @@ export function buildSimulationRun({
   };
 }
 
-export { DEFAULT_SIMULATION_CONFIG, validateSimulationConfig };
+export {
+  DEFAULT_SIMULATION_CONFIG,
+  SIMULATION_CONFIG_CONTRACT,
+  defaultSimulationConfigForStrategy,
+  validateSimulationConfig,
+};

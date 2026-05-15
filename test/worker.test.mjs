@@ -7,8 +7,10 @@ import {
   DEFAULT_BUDGET_POLICY,
   DEFAULT_SCHEDULE_POLICY,
   DEFAULT_SIMULATION_CONFIG,
+  SIMULATION_CONFIG_CONTRACT,
   STRATEGY_REGISTRY,
   buildSimulationRun,
+  defaultSimulationConfigForStrategy,
   validateBudgetPolicy,
   validateSchedulePolicy,
   validateSimulationConfig,
@@ -44,7 +46,8 @@ test("strategy registry validator rejects arbitrary, duplicate, live, and high-f
       name: "Operator uploaded strategy",
       status: "live",
       cadence: "minute",
-      allowedInstruments: ["US_EQUITIES", "FOREX", "CRYPTO"],
+      allowedMarkets: ["US_EQUITIES", "FOREX", "CRYPTO"],
+      allowedInstrumentClasses: ["EQUITY", "FOREX", "CFD"],
       expectedHoldingPeriod: "intraday scalping",
     },
   ]);
@@ -53,7 +56,8 @@ test("strategy registry validator rejects arbitrary, duplicate, live, and high-f
   assert.match(result.errors.join(" "), /unique/);
   assert.match(result.errors.join(" "), /simulation-only or context-only/);
   assert.match(result.errors.join(" "), /daily or weekly/);
-  assert.match(result.errors.join(" "), /unknown instruments/);
+  assert.match(result.errors.join(" "), /unknown markets/);
+  assert.match(result.errors.join(" "), /unknown instrument classes/);
   assert.match(result.errors.join(" "), /low-frequency/);
 });
 
@@ -179,8 +183,10 @@ test("simulation config validates predefined strategy, budget, markets, instrume
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(DEFAULT_SIMULATION_CONFIG.allowedMarkets, ["US", "AU"]);
+  assert.equal(SIMULATION_CONFIG_CONTRACT.source, "Money-maker-3000/src/simulation-contract.mjs");
+  assert.deepEqual(DEFAULT_SIMULATION_CONFIG.allowedMarkets, ["US_EQUITIES", "AU_EQUITIES"]);
   assert.deepEqual(DEFAULT_SIMULATION_CONFIG.allowedInstrumentClasses, ["EQUITY", "ETF"]);
+  assert.equal(DEFAULT_SIMULATION_CONFIG.cadence.frequency, "daily");
   assert.equal(DEFAULT_SIMULATION_CONFIG.cadence.minimumEvaluationIntervalMinutes, 240);
   assert.equal(DEFAULT_SIMULATION_CONFIG.execution.providerCalls, "blocked");
 });
@@ -191,10 +197,11 @@ test("simulation config rejects unregistered strategies, blocked instruments, HF
       ...DEFAULT_SIMULATION_CONFIG,
       strategyId: "operator-uploaded-code",
       budgetUsd: 5000,
-      allowedMarkets: ["US", "BINANCE"],
+      allowedMarkets: ["US_EQUITIES", "BINANCE"],
       allowedInstrumentClasses: ["EQUITY", "CRYPTO"],
       cadence: {
         mode: "high-frequency",
+        frequency: "minute",
         minimumEvaluationIntervalMinutes: 5,
         maxDecisionsPerDay: 100,
       },
@@ -221,6 +228,55 @@ test("simulation config rejects unregistered strategies, blocked instruments, HF
   assert.match(result.errors.join(" "), /live trading/);
 });
 
+test("simulation config enforces strategy-specific market, instrument-class, and cadence rules", () => {
+  const dcaForex = validateSimulationConfig(
+    {
+      ...defaultSimulationConfigForStrategy("dca-cash-reserve"),
+      allowedMarkets: ["FOREX"],
+      allowedInstrumentClasses: ["FOREX"],
+    },
+    {
+      strategyRegistry: STRATEGY_REGISTRY,
+      budgetPolicy: DEFAULT_BUDGET_POLICY,
+      schedulePolicy: DEFAULT_SCHEDULE_POLICY,
+    },
+  );
+  const thresholdDaily = validateSimulationConfig(
+    {
+      ...defaultSimulationConfigForStrategy("threshold-rebalance"),
+      cadence: {
+        ...DEFAULT_SIMULATION_CONFIG.cadence,
+        frequency: "daily",
+      },
+    },
+    {
+      strategyRegistry: STRATEGY_REGISTRY,
+      budgetPolicy: DEFAULT_BUDGET_POLICY,
+      schedulePolicy: DEFAULT_SCHEDULE_POLICY,
+    },
+  );
+  const mismatchedMarketClass = validateSimulationConfig(
+    {
+      ...defaultSimulationConfigForStrategy("news-aware-watchlist"),
+      allowedMarkets: ["US_EQUITIES"],
+      allowedInstrumentClasses: ["FOREX"],
+    },
+    {
+      strategyRegistry: STRATEGY_REGISTRY,
+      budgetPolicy: DEFAULT_BUDGET_POLICY,
+      schedulePolicy: DEFAULT_SCHEDULE_POLICY,
+    },
+  );
+
+  assert.equal(dcaForex.ok, false);
+  assert.match(dcaForex.errors.join(" "), /allowed markets are not allowed for dca-cash-reserve/);
+  assert.match(dcaForex.errors.join(" "), /allowed instrument classes are not allowed for dca-cash-reserve/);
+  assert.equal(thresholdDaily.ok, false);
+  assert.match(thresholdDaily.errors.join(" "), /cadence frequency is not allowed for threshold-rebalance/);
+  assert.equal(mismatchedMarketClass.ok, false);
+  assert.match(mismatchedMarketClass.errors.join(" "), /instrument classes not supported by selected markets/);
+});
+
 test("simulation run surfaces invalid config as a risk veto", () => {
   const run = buildSimulationRun({
     simulationConfig: {
@@ -242,6 +298,8 @@ test("simulation run preserves the existing strategyId option without a full con
 
   assert.equal(run.strategyId, "threshold-rebalance");
   assert.equal(run.simulationConfig.strategyId, "threshold-rebalance");
+  assert.deepEqual(run.simulationConfig.allowedMarkets, ["US_EQUITIES", "AU_EQUITIES", "COMMODITIES"]);
+  assert.equal(run.simulationConfig.cadence.frequency, "weekly");
   assert.equal(run.configValidation.ok, true);
 });
 

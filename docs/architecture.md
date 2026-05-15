@@ -57,17 +57,22 @@ portfolio state, and reconciliation inputs are designed and reviewed.
 
 Strategy configuration is validated before each simulation run. Valid
 configuration must use a predefined strategy, selectable USD budget, approved
-markets, approved instrument classes, low-frequency cadence, provider calls
-blocked, live/demo execution blocked, shorts blocked, copy trading blocked, and
-leverage fixed at 1.
+market groups, approved instrument classes, low-frequency cadence, provider
+calls blocked, live/demo execution blocked, shorts blocked, copy trading
+blocked, and leverage fixed at 1. The canonical config contract lives in
+`src/simulation-contract.mjs` and uses `US_EQUITIES`, `AU_EQUITIES`, `FOREX`,
+and `COMMODITIES` market groups. Runtime config is checked against the selected
+strategy's allowed market groups, allowed instrument classes, and cadence before
+a run DTO is returned.
 
 ## Strategy Registry Validation
 
 The predefined registry is also validated as a contract. Strategy entries must
 have unique kebab-case identifiers, simulation-safe statuses, low-frequency
-cadence, known instrument metadata, and non-HFT holding-period descriptions.
-Simulation strategies cannot include blocked execution instruments such as
-FOREX; context-only strategies can describe broader context, but still cannot
+cadence, known market groups, known instrument classes, compatible
+market/instrument-class pairings, and non-HFT holding-period descriptions.
+Simulation strategies cannot include blocked execution instrument classes such
+as FOREX; context-only strategies can describe broader context, but still cannot
 create orders or recommendations.
 
 ## Not Implemented
