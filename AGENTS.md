@@ -24,3 +24,8 @@ work as financial and security-sensitive.
 ## Validation
 
 Run `npm run check` after changing worker contracts or strategy logic.
+
+## Memory
+
+Read `docs/agent-memory.md` for the compact current implementation state,
+performance constraints, and context-retrieval notes.

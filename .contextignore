@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+dist/
+build/
+.env
+.env.*
+*.log
+*.jsonl
+data/
+tmp/
+temp/
+reports/
+performance-report.*
