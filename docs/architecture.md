@@ -15,7 +15,8 @@ The first slice is local and synthetic:
 1. Apply budget and cadence guardrails.
 1. Evaluate a synthetic portfolio context.
 1. Record a why-no-trade simulation ledger entry in local append-only JSONL.
-1. Return redacted DTOs suitable for dashboard display.
+1. Return redacted DTOs and provider-readiness metadata suitable for dashboard
+   display.
 
 ## Local Simulation Ledger
 
@@ -27,6 +28,18 @@ private provider state.
 
 The ledger is a simulation audit trail, not an execution log. Provider calls,
 demo trading, and live trading remain blocked.
+
+## Provider Metadata
+
+`src/providers.mjs` exposes a provider registry and metadata snapshot for
+dashboard readiness checks. The current eToro entry is metadata-only: provider
+calls are blocked, credentials are not loaded, account and market data are
+absent, order preview is absent, and demo/live execution are blocked.
+
+The provider metadata validator rejects enabled provider calls, loaded
+credentials, loaded account data, demo/live execution, non-simulation modes, or
+enabled capabilities. It is a contract scaffold only and must not become an
+adapter or credential boundary without a separate review gate.
 
 ## Synthetic Backtest/Performance Summary
 

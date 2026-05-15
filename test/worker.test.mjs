@@ -19,12 +19,74 @@ import {
   readSimulationLedgerRecords,
   redactTradeLogEntry,
 } from "../src/ledger.mjs";
+import {
+  PROVIDER_REGISTRY,
+  buildProviderMetadataSnapshot,
+  validateProviderMetadata,
+} from "../src/providers.mjs";
 import { runOnceAndAppendLedger } from "../src/worker.mjs";
 
 test("strategy registry is predefined and simulation safe", () => {
   assert.equal(STRATEGY_REGISTRY.length, 3);
   assert.equal(STRATEGY_REGISTRY.some((strategy) => strategy.strategyId === "news-aware-watchlist"), true);
   assert.equal(STRATEGY_REGISTRY.every((strategy) => strategy.status !== "live"), true);
+});
+
+test("provider registry exposes metadata only and blocks all provider capabilities", () => {
+  const snapshot = buildProviderMetadataSnapshot();
+  const validation = validateProviderMetadata(PROVIDER_REGISTRY[0]);
+  const provider = snapshot.providers[0];
+  const serialized = JSON.stringify(snapshot);
+
+  assert.equal(validation.ok, true);
+  assert.equal(snapshot.mode, "metadata-only");
+  assert.equal(snapshot.providerCalls, "blocked");
+  assert.equal(snapshot.credentials, "not-loaded");
+  assert.equal(snapshot.executionRoutes, "absent");
+  assert.equal(provider.providerId, "etoro");
+  assert.equal(provider.status, "metadata-only");
+  assert.equal(provider.demoExecution, "blocked");
+  assert.equal(provider.liveExecution, "blocked");
+  assert.deepEqual(provider.supportedModes, ["simulation"]);
+  assert.equal(Object.values(provider.capabilities).every((value) => value !== "enabled"), true);
+  assert.equal(snapshot.validation.ok, true);
+  assert.equal(serialized.includes("apiKey"), false);
+  assert.equal(serialized.includes("accessToken"), false);
+  assert.equal(serialized.includes('"accountId"'), false);
+});
+
+test("provider metadata validator rejects enabled calls, credentials, and execution", () => {
+  const result = validateProviderMetadata({
+    ...PROVIDER_REGISTRY[0],
+    providerCalls: "enabled",
+    credentials: "loaded",
+    accountData: "loaded",
+    demoExecution: "enabled",
+    liveExecution: "enabled",
+    supportedModes: ["simulation", "demo"],
+    capabilities: {
+      ...PROVIDER_REGISTRY[0].capabilities,
+      portfolioRead: "enabled",
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join(" "), /provider calls/);
+  assert.match(result.errors.join(" "), /credentials/);
+  assert.match(result.errors.join(" "), /account data/);
+  assert.match(result.errors.join(" "), /demo execution/);
+  assert.match(result.errors.join(" "), /live execution/);
+  assert.match(result.errors.join(" "), /supported modes/);
+  assert.match(result.errors.join(" "), /portfolioRead/);
+});
+
+test("provider metadata snapshot reports malformed providers without throwing", () => {
+  const snapshot = buildProviderMetadataSnapshot({ providers: [null] });
+
+  assert.equal(snapshot.validation.ok, false);
+  assert.equal(snapshot.providers[0].providerId, "unknown");
+  assert.equal(snapshot.providers[0].status, "invalid");
+  assert.match(snapshot.validation.providers[0].errors.join(" "), /provider metadata must be an object/);
 });
 
 test("default budget policy enforces hard limits", () => {
@@ -74,6 +136,9 @@ test("simulation run logs why no trade and redacts private state", () => {
   assert.equal(run.vetoes.includes("execution-route-absent"), true);
   assert.equal(run.tradeLogEntry.action, "simulated-skip");
   assert.equal(run.tradeLogEntry.accountIdentifiers, "redacted");
+  assert.equal(run.providerMetadata.mode, "metadata-only");
+  assert.equal(run.providerMetadata.providerCalls, "blocked");
+  assert.equal(run.providerMetadata.validation.ok, true);
   assert.equal(run.positionContext[0].newsContext[0].summary.includes("cannot create an order"), true);
   assert.equal(serialized.includes("apiKey"), false);
   assert.equal(serialized.includes("userKey"), false);

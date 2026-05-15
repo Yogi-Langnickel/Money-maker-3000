@@ -1,4 +1,5 @@
 import { DEFAULT_SIMULATION_CONFIG, validateSimulationConfig } from "./config.mjs";
+import { buildProviderMetadataSnapshot } from "./providers.mjs";
 
 export const DEFAULT_BUDGET_POLICY = Object.freeze({
   baseBudgetUsd: 1000,
@@ -189,6 +190,7 @@ export function buildSimulationRun({
       remainingUsd: effectiveSimulationConfig.budgetUsd ?? budgetPolicy.baseBudgetUsd,
       maxConfigurableBudgetUsd: budgetPolicy.maxConfigurableBudgetUsd,
     },
+    providerMetadata: buildProviderMetadataSnapshot(),
     positionContext: SYNTHETIC_POSITION_CONTEXT,
     tradeLogEntry: {
       tradeLogId: `trade-log-${now.getTime()}`,

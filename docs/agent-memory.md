@@ -12,6 +12,9 @@ Created: 2026-05-15
 - Strategy selection comes only from the predefined registry.
 - Current performance diagnostics are synthetic only: run counts, skipped and
   blocked decisions, veto histograms, warning histograms, and budget ranges.
+- Provider readiness metadata is metadata-only and explicitly blocks provider
+  calls, credentials, account data, order previews, demo execution, and live
+  execution.
 - Do not report real PnL, win rate, drawdown, Sharpe ratio, or execution quality
   until provider history, market data, portfolio state, and reconciliation
   inputs are explicitly designed and reviewed.

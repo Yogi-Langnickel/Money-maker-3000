@@ -33,6 +33,8 @@ mode exists.
 - Low-frequency scheduling guardrails.
 - Synthetic portfolio/news context.
 - Redacted simulation trade log.
+- Provider readiness metadata that explicitly blocks credentials, provider
+  calls, account data, order previews, demo execution, and live execution.
 - Synthetic backtest/performance summary for veto and warning coverage.
 - No provider calls, no execution routes, no live trading.
 
