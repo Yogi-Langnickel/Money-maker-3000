@@ -18,7 +18,8 @@ Created: 2026-05-15
   `AU_EQUITIES`, `FOREX`, and `COMMODITIES`; selected config must satisfy the
   chosen strategy's allowed markets, allowed instrument classes, and cadence.
 - Current performance diagnostics are synthetic only: run counts, skipped and
-  blocked decisions, veto histograms, warning histograms, and budget ranges.
+  blocked decisions, deterministic scenario summaries, veto histograms, warning
+  histograms, config error histograms, no-HFT cadence counts, and budget ranges.
 - Provider readiness metadata is metadata-only and explicitly blocks provider
   calls, credentials, account data, order previews, demo execution, and live
   execution.

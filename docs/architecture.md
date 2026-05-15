@@ -46,7 +46,8 @@ adapter or credential boundary without a separate review gate.
 The first performance review path is synthetic diagnostics, not trading
 performance. `src/backtest.mjs` runs deterministic scenarios through the
 existing simulation contracts and summarizes run count, skipped decisions,
-blocked risk results, veto frequency, warning frequency, and budget ranges.
+blocked risk results, veto frequency, warning frequency, config error
+frequency, no-HFT cadence counts, scenario summaries, and budget ranges.
 
 This gives a stable way to review strategy coverage, config warnings, and
 guardrail pressure before provider adapters exist. It must not report real PnL,
