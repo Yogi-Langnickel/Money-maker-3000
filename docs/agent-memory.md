@@ -10,6 +10,9 @@ Created: 2026-05-15
 - The worker does not call eToro, load credentials, place demo orders, place
   live orders, or expose execution routes.
 - Strategy selection comes only from the predefined registry.
+- The predefined strategy registry is contract-validated for unique IDs,
+  simulation-safe statuses, low-frequency cadence, and instrument metadata
+  before run DTOs are returned.
 - Current performance diagnostics are synthetic only: run counts, skipped and
   blocked decisions, veto histograms, warning histograms, and budget ranges.
 - Provider readiness metadata is metadata-only and explicitly blocks provider

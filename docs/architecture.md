@@ -61,6 +61,15 @@ markets, approved instrument classes, low-frequency cadence, provider calls
 blocked, live/demo execution blocked, shorts blocked, copy trading blocked, and
 leverage fixed at 1.
 
+## Strategy Registry Validation
+
+The predefined registry is also validated as a contract. Strategy entries must
+have unique kebab-case identifiers, simulation-safe statuses, low-frequency
+cadence, known instrument metadata, and non-HFT holding-period descriptions.
+Simulation strategies cannot include blocked execution instruments such as
+FOREX; context-only strategies can describe broader context, but still cannot
+create orders or recommendations.
+
 ## Not Implemented
 
 - Provider adapters.

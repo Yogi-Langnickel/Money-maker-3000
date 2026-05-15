@@ -12,6 +12,7 @@ import {
   validateBudgetPolicy,
   validateSchedulePolicy,
   validateSimulationConfig,
+  validateStrategyRegistry,
 } from "../src/contracts.mjs";
 import {
   appendSimulationLedgerRecord,
@@ -27,9 +28,33 @@ import {
 import { runOnceAndAppendLedger } from "../src/worker.mjs";
 
 test("strategy registry is predefined and simulation safe", () => {
+  const result = validateStrategyRegistry(STRATEGY_REGISTRY);
+
+  assert.equal(result.ok, true);
   assert.equal(STRATEGY_REGISTRY.length, 3);
   assert.equal(STRATEGY_REGISTRY.some((strategy) => strategy.strategyId === "news-aware-watchlist"), true);
   assert.equal(STRATEGY_REGISTRY.every((strategy) => strategy.status !== "live"), true);
+});
+
+test("strategy registry validator rejects arbitrary, duplicate, live, and high-frequency strategies", () => {
+  const result = validateStrategyRegistry([
+    STRATEGY_REGISTRY[0],
+    {
+      ...STRATEGY_REGISTRY[0],
+      name: "Operator uploaded strategy",
+      status: "live",
+      cadence: "minute",
+      allowedInstruments: ["US_EQUITIES", "FOREX", "CRYPTO"],
+      expectedHoldingPeriod: "intraday scalping",
+    },
+  ]);
+
+  assert.equal(result.ok, false);
+  assert.match(result.errors.join(" "), /unique/);
+  assert.match(result.errors.join(" "), /simulation-only or context-only/);
+  assert.match(result.errors.join(" "), /daily or weekly/);
+  assert.match(result.errors.join(" "), /unknown instruments/);
+  assert.match(result.errors.join(" "), /low-frequency/);
 });
 
 test("provider registry exposes metadata only and blocks all provider capabilities", () => {
@@ -139,6 +164,7 @@ test("simulation run logs why no trade and redacts private state", () => {
   assert.equal(run.providerMetadata.mode, "metadata-only");
   assert.equal(run.providerMetadata.providerCalls, "blocked");
   assert.equal(run.providerMetadata.validation.ok, true);
+  assert.equal(run.strategyRegistryValidation.ok, true);
   assert.equal(run.positionContext[0].newsContext[0].summary.includes("cannot create an order"), true);
   assert.equal(serialized.includes("apiKey"), false);
   assert.equal(serialized.includes("userKey"), false);
