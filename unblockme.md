@@ -1,6 +1,6 @@
 # Money-maker-3000 Unblock Notes
 
-Status: non-blocking for historical market-data/backtest implementation
+Status: non-blocking for Python historical market-data/backtest implementation
 Created: 2026-05-15
 
 Simulation and historical market-data/backtest work can continue locally. These
@@ -21,16 +21,17 @@ Unblock questions:
 
 - Historical market-data inputs are the first approved provider-adjacent
   direction. Start there before portfolio state or reconciliation records.
-- Use historical data to improve strategy backtests and deterministic
-  diagnostics for selected instruments.
+- Use historical data to improve deterministic diagnostics for selected
+  instruments. Backtest output must remain diagnostics only.
 - Portfolio state and reconciliation records remain blocked until a private
   worker-side storage boundary is designed.
 - The eToro Dashboard should not durably store account-linked data. Dashboard
   reads may use live provider data and short in-memory server cache/backoff
   metadata only.
 - Do not add credentials, demo execution, live execution, account-linked
-  durable storage, real PnL, win-rate, drawdown, or execution-quality reporting
-  until separate review gates approve the inputs and storage boundary.
+  durable storage, real PnL, win-rate, drawdown, Sharpe ratio, profitability, or
+  execution-quality reporting until separate review gates approve the inputs and
+  storage boundary.
 - Demo execution approval means approval to design and call eToro demo mutation
   endpoints. That is not approved yet; `execute` mode remains disabled.
 
@@ -41,7 +42,7 @@ First historical-data implementation boundary:
 
 - Start offline-fixture-first, not with live eToro fetch code.
 - Use small public daily OHLCV fixtures under
-  `test/fixtures/market-history/` when committed.
+  `tests/fixtures/market_history/` when committed.
 - Keep larger generated downloads under ignored
   `data/private/market-history/`.
 - Start with `SPY`/`GLD` style ETF or equity symbols that already fit the

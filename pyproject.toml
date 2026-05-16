@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "money-maker-3000"
+version = "0.1.0"
+description = "Python-first simulation worker core with blocked execution/provider boundaries."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+money-maker-3000 = "money_maker_3000.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

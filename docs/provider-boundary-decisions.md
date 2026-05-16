@@ -1,36 +1,38 @@
 # Provider Boundary Decisions
 
-Status: active  
+Status: active
 Created: 2026-05-16
+Updated: 2026-05-17
 
 ## Decision
 
-Money-maker-3000 should unlock provider work in this order:
+Money-maker-3000 remains Python-first, offline-fixture-first, and
+simulation-only.
+
+Provider work should unlock in this order:
 
 1. Historical market-data inputs.
-2. Strategy backtest fixtures and deterministic performance diagnostics.
-3. Read-only portfolio-state snapshots.
-4. Reconciliation records that compare bot state to provider state.
-5. Demo execution design.
+1. Strategy backtest fixtures and deterministic diagnostics.
+1. Read-only portfolio-state snapshots.
+1. Reconciliation records that compare bot state to provider state.
+1. Demo execution design.
 
-Live execution remains out of scope.
+Live execution remains out of scope. Demo execution remains disabled.
 
-## Rationale
+## Allocation And Reconciliation
 
-Historical market data comes first because it lets the worker test strategy
-logic, risk gates, cadence, and slippage assumptions without touching private
-account-linked data. Portfolio state and reconciliation are more sensitive
-because they can expose holdings, balances, position ids, account behavior, or
-provider correlation ids.
+Internal bot allocation is separate from provider/demo balance. The worker
+models allocation with bot allocation, reserved amount, available amount,
+per-order cap, allocation ID, and strategy allocation IDs.
 
-This order keeps the next phase useful while preserving the current
-simulation-first boundary:
+Provider/demo balance is a read-only reconciliation input only. It must never
+size orders, budgets, or risk caps. It must not be persisted as a balance in
+audit records or dashboard DTOs.
 
-- Strategies can be backtested on selected instruments.
-- Provider adapters can stay read-only.
-- Account-linked data can remain absent until a private storage design exists.
-- Execution paths do not appear before audit, reconciliation, idempotency, and
-  operator controls exist.
+Risk gates fail closed until provider state is known read-only and
+reconciliation is available. Loss/drawdown stops stay simulation-only until real
+reconciliation exists, and DTOs must say they are not evaluated against real
+PnL.
 
 ## Dashboard Storage Boundary
 
@@ -42,15 +44,15 @@ Allowed for the dashboard:
 - Short in-memory server cache/backoff metadata for rate-limit and freshness
   protection.
 - Redacted, non-account-identifying UI DTOs.
-- Local simulation bot config that contains strategy/budget/cadence choices
-  only and no account ids, provider payloads, balances, holdings, position ids,
-  order ids, or transaction history.
+- Local simulation bot config that contains strategy, allocation, budget, and
+  cadence choices only and no account IDs, provider payloads, balances,
+  holdings, position IDs, order IDs, or transaction history.
 
 Not allowed without a new review:
 
 - Durable storage of account-linked dashboard data.
 - Raw provider payload persistence.
-- Real portfolio exports, balances, holdings, position ids, order ids,
+- Real portfolio exports, balances, holdings, position IDs, order IDs,
   transaction history, or reconciliation records in the dashboard repo.
 - Browser-side access to credentials or privileged provider payloads.
 
@@ -69,7 +71,7 @@ or simulation ledgers. Before demo execution is implemented, a separate review
 must define:
 
 - Demo environment only.
-- Allowed strategy id and strategy version.
+- Allowed strategy ID and strategy version.
 - Allowed instruments and markets.
 - Maximum cash amount or unit size.
 - Leverage fixed at 1.
@@ -84,34 +86,26 @@ must define:
 Until that explicit approval exists, `execute` mode stays rejected/disabled and
 provider execution calls stay absent.
 
-## First Historical Data Slice
+## Historical Data Rules
 
-Make the first provider-adjacent slice offline-fixture-first, not live eToro
-fetch code.
-
-Recommended source order:
-
-1. Public daily OHLCV history for selected instruments, starting with
-   `SPY`/`GLD` style ETF or equity symbols that already fit the simulation
-   contract.
-2. Small deterministic fixtures committed under `test/fixtures/market-history/`
-   when they contain only public market bars and no account-linked data.
-3. Larger generated downloads under ignored `data/private/market-history/`.
+The first provider-adjacent slice is offline fixture data, not live eToro fetch
+code.
 
 Fixture format:
 
 ```text
 symbol,date,open,high,low,close,volume,source
-SPY,2026-01-02,0,0,0,0,0,fixture
+SPY,2026-01-02,1,2,1,2,100,fixture
 ```
 
 Rules:
 
-- No account ids, balances, holdings, position ids, order ids, transaction
-  history, provider user keys, raw account payloads, or screenshots.
-- No execution quality, real PnL, win-rate, Sharpe ratio, or drawdown claims
-  until assumptions and source coverage are reviewed.
-- The first parser should validate schema, date ordering, numeric bars,
-  source metadata, selected strategy/instrument compatibility, and deterministic
-  replay.
-- Live historical-data fetching can come after fixture parser tests exist.
+- Use stdlib streaming CSV/date validation.
+- Expose iterator-based bar parsing.
+- Use single-pass reducers for summaries.
+- Commit only tiny public market fixtures.
+- Keep larger generated downloads under ignored local data paths.
+- Do not include account IDs, balances, holdings, position IDs, order IDs,
+  transaction history, provider user keys, raw account payloads, or screenshots.
+- Do not report real PnL, win rate, Sharpe ratio, drawdown, execution quality,
+  or profitability claims.

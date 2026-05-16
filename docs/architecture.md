@@ -1,127 +1,131 @@
 # Money-maker-3000 Architecture
 
-Status: scaffold
+Status: Python-first core
 
-Money-maker-3000 is intended to run as a separate worker/service from the eToro
-Dashboard. The dashboard consumes redacted status and ledger DTOs; the worker
-owns strategy evaluation, risk vetoes, scheduling, trade logging, and eventual
-reconciliation.
+Money-maker-3000 runs as a separate simulation worker/service from the eToro
+Dashboard. The dashboard consumes versioned, redacted JSON DTOs; the worker owns
+strategy registry validation, allocation policy, pure risk gating, fixture
+backtests, audit ledgers, and eventual reconciliation design.
 
-## First Slice
+## Python Core
 
-The first slice is local and synthetic:
+The runtime package lives under `src/money_maker_3000/`.
 
-1. Load a predefined strategy registry.
-1. Apply budget and cadence guardrails.
-1. Evaluate a synthetic portfolio context.
-1. Record a why-no-trade simulation ledger entry in local append-only JSONL.
-1. Return redacted DTOs and provider-readiness metadata suitable for dashboard
-   display.
+- `contracts.py`: simulation config, run-mode policy, allocation policy, and
+  validators.
+- `strategies.py`: predefined registry and registry validator.
+- `risk.py`: pure fail-closed risk gate.
+- `market_history.py`: stdlib streaming CSV parser and single-pass history
+  accumulator.
+- `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
+- `ledger.py`: redacted append/read/report JSONL audit records.
+- `providers.py`: metadata-only provider boundary and disabled execution
+  gateway contract.
+- `cli.py`: `backtest` and `ledger-report` commands.
 
-## Local Simulation Ledger
+There is no Node runtime requirement.
 
-The durable first-slice ledger is local JSONL written only when the caller
-provides a path. Records are append-only at the application layer, synthetic,
-and redacted before persistence. They must not contain account identifiers,
-provider payloads, balances, credentials, tokens, portfolio exports, or other
-private provider state.
+## Allocation Boundary
 
-The ledger is a simulation audit trail, not an execution log. Provider calls,
-demo trading, and live trading remain blocked.
+The bot has an internal allocation model independent of provider/demo account
+balances:
 
-`src/ledger.mjs` can export a redacted simulation ledger report DTO from JSONL
-records. The report summarizes synthetic record counts, decisions, risk
-results, veto histograms, strategy IDs, and record time bounds for dashboard
-consumption. It intentionally omits private provider payloads and account-like
-fields, and carries explicit `providerCalls: "blocked"`,
-`executionRoutes: "absent"`, `demoExecution: "blocked"`, and
-`liveExecution: "blocked"` fields.
+- `allocationId`
+- per-strategy allocation IDs
+- `botAllocationUsd`
+- `reservedUsd`
+- `availableUsd`
+- `maxOrderUsd`
 
-## Provider Metadata
+Provider/demo balances are read-only reconciliation inputs only. They are never
+used as sizing inputs and are redacted from audit records and reports.
 
-`src/providers.mjs` exposes a provider registry and metadata snapshot for
-dashboard readiness checks. The current eToro entry is metadata-only: provider
-calls are blocked, credentials are not loaded, account and market data are
-absent, order preview is absent, and demo/live execution are blocked.
+## Risk Gate
 
-The provider metadata validator rejects enabled provider calls, loaded
-credentials, loaded account data, demo/live execution, non-simulation modes, or
-enabled capabilities. It is a contract scaffold only and must not become an
-adapter or credential boundary without a separate review gate.
+The risk engine runs before any strategy output could become an order intent and
+fails closed when inputs are missing or invalid. It blocks on missing allocation,
+unknown provider state, missing reconciliation, stale or missing data, invalid
+strategy version/instrument, incomplete risk policy, missing loss
+reconciliation, and absent execution routes.
+
+The policy enforces daily loss stop, weekly loss stop, max allocation drawdown,
+per-order cap, per-instrument exposure cap, max open positions, cash reserve
+floor, leverage fixed at 1, no shorts, no copy trading, and blocked CFDs,
+options, derivatives, and crypto.
+
+Loss and drawdown stops are simulation-only until real reconciliation exists.
+DTO diagnostics explicitly state they are not evaluated against real PnL.
+
+## Provider Boundary
+
+`src/money_maker_3000/providers.py` exposes metadata only. Provider calls,
+credentials, account data, market-data adapters, order previews, demo execution,
+live execution, and execution routes are blocked or absent.
+
+`DisabledExecutionGateway` is an interface/contract stub that raises
+`PermissionError` for order preview and submit attempts. It must not become an
+adapter without a separate provider/execution review.
+
+## Market History And Backtests
+
+Historical market data is offline fixture only. The parser uses stdlib `csv`
+with date/schema validation and exposes an iterator-based bar parser. Reducers
+are single-pass accumulators and avoid materializing bars except in tiny fixture
+test helpers.
+
+Backtest DTOs include deterministic metadata:
+
+- strategy ID/version
+- config version
+- data source
+- first/last date
+- row count
+- input SHA-256
+- parser version
+- Python version
+- explicit `startedAt`
+
+Backtest output is diagnostics only: coverage, veto counts, config errors,
+cadence/risk gate behavior, and fixture source/date coverage. It must not
+report real PnL, win rate, Sharpe ratio, drawdown, execution quality, or
+profitability claims.
+
+## Audit Ledger
+
+Audit records are local append-only JSONL at the application layer. They are
+redacted before persistence and contain:
+
+- correlation ID
+- strategy version
+- config hash
+- allocation ID and strategy allocation ID
+- risk decision
+- veto reasons
+- data freshness
+- provider call status
+
+They must not contain account IDs, balances, holdings, position IDs, order IDs,
+raw provider payloads, credentials, or account-linked history.
 
 ## Provider Input Order
 
-Provider work should proceed in this order:
+Provider-adjacent work should proceed in this order:
 
-1. Historical market-data inputs.
-2. Strategy backtest fixtures and deterministic diagnostics.
-3. Read-only portfolio-state snapshots.
-4. Reconciliation records.
-5. Demo execution design.
-
-Historical market data comes first because it improves strategy evaluation
-without requiring account-linked persistence. Portfolio state and reconciliation
-records can expose holdings, balances, position ids, provider correlation ids,
-or account behavior, so they remain blocked until a private worker-side storage
-boundary exists.
-
-The eToro Dashboard should not durably store account-linked data. It may use
-live read-only responses and short in-memory server cache/backoff metadata for
-freshness and rate-limit protection. Any future account-linked history belongs
-in a private worker-side store with explicit retention, redaction, encryption,
-and audit rules.
+1. Offline historical market-data fixtures.
+1. Deterministic strategy backtest diagnostics.
+1. Read-only portfolio-state snapshot design.
+1. Reconciliation records.
+1. Demo execution design.
 
 Demo execution approval means permission to design and call eToro demo mutation
-endpoints. That is not approved by backtest work, read-only provider work, or
-simulation ledgers. Until a separate approval exists, `execute` mode stays
+endpoints. That approval is not implied by backtests, read-only provider work,
+or simulation ledgers. Until a separate approval exists, `execute` mode stays
 rejected and provider execution calls remain absent.
-
-## Synthetic Backtest/Performance Summary
-
-The first performance review path is synthetic diagnostics, not trading
-performance. `src/backtest.mjs` runs deterministic scenarios through the
-existing simulation contracts and summarizes run count, skipped decisions,
-blocked risk results, veto frequency, warning frequency, config error
-frequency, no-HFT cadence counts, scenario summaries, and budget ranges.
-
-This gives a stable way to review strategy coverage, config warnings, and
-guardrail pressure before provider adapters exist. It must not report real PnL,
-win rate, Sharpe ratio, drawdown, or execution quality until market history,
-portfolio state, and reconciliation inputs are designed and reviewed.
-
-## Configuration Validation
-
-Strategy configuration is validated before each simulation run. Valid
-configuration must use `backtest` run mode, a predefined strategy, a selected
-instrument that matches the selected strategy's market and instrument-class
-rules, selectable USD budget, approved market groups, approved instrument
-classes, low-frequency cadence, provider calls blocked, live/demo execution
-blocked, shorts blocked, copy trading blocked, and leverage fixed at 1. The
-canonical config contract lives in
-`src/simulation-contract.mjs` and uses `US_EQUITIES`, `AU_EQUITIES`, `FOREX`,
-and `COMMODITIES` market groups. Runtime config is checked against the selected
-strategy's allowed market groups, allowed instrument classes, and cadence before
-a run DTO is returned.
-
-The run mode contract is explicit so callers can choose between backtesting a
-selected strategy/instrument and future execution. Execution mode exists only as
-a rejected contract value for now: the validator and CLI both reject it, and no
-provider credentials or trading calls are present.
-
-## Strategy Registry Validation
-
-The predefined registry is also validated as a contract. Strategy entries must
-have unique kebab-case identifiers, simulation-safe statuses, low-frequency
-cadence, known market groups, known instrument classes, compatible
-market/instrument-class pairings, and non-HFT holding-period descriptions.
-Simulation strategies cannot include blocked execution instrument classes such
-as FOREX; context-only strategies can describe broader context, but still cannot
-create orders or recommendations.
 
 ## Not Implemented
 
 - Provider adapters.
 - Credential loading.
-- Durable leases.
+- Durable account-linked storage.
 - Demo order preview or execution.
 - Live trading.

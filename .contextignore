@@ -1,4 +1,3 @@
-node_modules/
 coverage/
 dist/
 build/
@@ -6,6 +5,17 @@ build/
 .env.*
 *.log
 *.jsonl
+__pycache__/
+.pycache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+*.prof
+profile*.txt
+*.sqlite
+*.sqlite3
+*.db
 data/
 tmp/
 temp/
