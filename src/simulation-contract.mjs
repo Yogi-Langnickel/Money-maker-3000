@@ -19,6 +19,22 @@ export const SIMULATION_RUN_MODES = Object.freeze(["backtest", "execute"]);
 export const SIMULATION_CADENCES = Object.freeze(["daily", "weekly"]);
 export const MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES = 240;
 export const MAX_SIMULATION_DECISIONS_PER_DAY = 3;
+export const SIMULATION_RUN_MODE_POLICY = Object.freeze({
+  backtest: Object.freeze({
+    enabled: true,
+    providerCalls: "blocked",
+    historicalInputs: "offline-fixture-only",
+    accountData: "absent",
+    executionRoutes: "absent",
+  }),
+  execute: Object.freeze({
+    enabled: false,
+    providerCalls: "blocked",
+    demoExecution: "blocked",
+    liveExecution: "blocked",
+    reason: "demo execution requires a separate review and explicit approval",
+  }),
+});
 
 export const SIMULATION_MARKET_INSTRUMENT_CLASS_RULES = Object.freeze({
   US_EQUITIES: Object.freeze(["EQUITY", "ETF"]),
@@ -89,6 +105,7 @@ export const SIMULATION_CONFIG_CONTRACT = Object.freeze({
   instrumentClasses: SIMULATION_INSTRUMENT_CLASSES,
   blockedInstrumentClasses: BLOCKED_SIMULATION_INSTRUMENT_CLASSES,
   runModes: SIMULATION_RUN_MODES,
+  runModePolicy: SIMULATION_RUN_MODE_POLICY,
   marketInstrumentClassRules: SIMULATION_MARKET_INSTRUMENT_CLASS_RULES,
   cadences: SIMULATION_CADENCES,
   minimumEvaluationIntervalMinutes: MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES,

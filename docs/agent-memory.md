@@ -19,6 +19,9 @@ Created: 2026-05-15
   `AU_EQUITIES`, `FOREX`, and `COMMODITIES`; selected config must satisfy the
   chosen strategy's selected instrument, allowed markets, allowed instrument
   classes, and cadence.
+- The simulation contract now exposes a run-mode policy: `backtest` is enabled
+  for offline fixture inputs only, while `execute` remains disabled with
+  provider calls, demo execution, live execution, and execution routes blocked.
 - Current performance diagnostics are synthetic only: run counts, skipped and
   blocked decisions, deterministic scenario summaries, veto histograms, warning
   histograms, config error histograms, no-HFT cadence counts, and budget ranges.

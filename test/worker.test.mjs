@@ -193,6 +193,14 @@ test("simulation config validates predefined strategy, budget, markets, instrume
   assert.equal(result.ok, true);
   assert.equal(SIMULATION_CONFIG_CONTRACT.source, "Money-maker-3000/src/simulation-contract.mjs");
   assert.deepEqual(SIMULATION_CONFIG_CONTRACT.runModes, ["backtest", "execute"]);
+  assert.equal(SIMULATION_CONFIG_CONTRACT.runModePolicy.backtest.enabled, true);
+  assert.equal(
+    SIMULATION_CONFIG_CONTRACT.runModePolicy.backtest.historicalInputs,
+    "offline-fixture-only",
+  );
+  assert.equal(SIMULATION_CONFIG_CONTRACT.runModePolicy.execute.enabled, false);
+  assert.equal(SIMULATION_CONFIG_CONTRACT.runModePolicy.execute.demoExecution, "blocked");
+  assert.match(SIMULATION_CONFIG_CONTRACT.runModePolicy.execute.reason, /separate review/);
   assert.equal(DEFAULT_SIMULATION_CONFIG.runMode, "backtest");
   assert.deepEqual(DEFAULT_SIMULATION_CONFIG.selectedInstrument, {
     symbol: "SPY",
