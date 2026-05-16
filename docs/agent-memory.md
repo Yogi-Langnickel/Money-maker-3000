@@ -22,6 +22,10 @@ Created: 2026-05-15
 - Current performance diagnostics are synthetic only: run counts, skipped and
   blocked decisions, deterministic scenario summaries, veto histograms, warning
   histograms, config error histograms, no-HFT cadence counts, and budget ranges.
+- `src/ledger.mjs` exports redacted simulation ledger report DTOs for dashboard
+  consumption; reports summarize synthetic records, strategies, decisions, risk
+  results, vetoes, and record time bounds while preserving blocked provider and
+  execution fields.
 - Provider readiness metadata is metadata-only and explicitly blocks provider
   calls, credentials, account data, order previews, demo execution, and live
   execution.

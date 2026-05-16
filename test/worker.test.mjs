@@ -18,7 +18,9 @@ import {
 } from "../src/contracts.mjs";
 import {
   appendSimulationLedgerRecord,
+  buildSimulationLedgerReport,
   buildLedgerRecord,
+  exportSimulationLedgerReport,
   readSimulationLedgerRecords,
   redactTradeLogEntry,
 } from "../src/ledger.mjs";
@@ -483,6 +485,106 @@ test("worker can append a redacted simulation ledger record when a path is provi
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("simulation ledger report exports a redacted dashboard DTO without execution fields", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "money-maker-ledger-report-"));
+  const ledgerPath = join(tempDir, "simulation-ledger.jsonl");
+
+  try {
+    const firstRun = buildSimulationRun({
+      now: new Date("2026-05-15T00:00:00.000Z"),
+    });
+    const secondRun = buildSimulationRun({
+      strategyId: "threshold-rebalance",
+      now: new Date("2026-05-15T00:01:00.000Z"),
+      simulationConfig: {
+        selectedInstrument: {
+          symbol: "GLD",
+          market: "COMMODITIES",
+          instrumentClass: "ETF",
+        },
+        budgetUsd: 1500,
+      },
+    });
+
+    await appendSimulationLedgerRecord(
+      ledgerPath,
+      buildLedgerRecord({
+        run: firstRun,
+        entry: {
+          ...firstRun.tradeLogEntry,
+          accountId: "acct-real-123",
+          accessToken: "secret-token",
+          nested: {
+            portfolioBalance: 12345,
+          },
+        },
+      }),
+    );
+    await appendSimulationLedgerRecord(ledgerPath, buildLedgerRecord({ run: secondRun }));
+
+    const report = await exportSimulationLedgerReport(ledgerPath, {
+      generatedAt: new Date("2026-05-15T01:00:00.000Z"),
+    });
+    const serialized = JSON.stringify(report);
+
+    assert.equal(report.mode, "simulation-ledger-report");
+    assert.equal(report.environment, "synthetic");
+    assert.equal(report.providerCalls, "blocked");
+    assert.equal(report.executionRoutes, "absent");
+    assert.equal(report.demoExecution, "blocked");
+    assert.equal(report.liveExecution, "blocked");
+    assert.equal(report.generatedAt, "2026-05-15T01:00:00.000Z");
+    assert.equal(report.summary.recordCount, 2);
+    assert.equal(report.summary.skipCount, 2);
+    assert.equal(report.summary.blockedCount, 2);
+    assert.equal(report.summary.uniqueRunCount, 2);
+    assert.deepEqual(report.summary.strategyIds, ["dca-cash-reserve", "threshold-rebalance"]);
+    assert.equal(report.summary.firstRecordedAt, "2026-05-15T00:00:00.000Z");
+    assert.equal(report.summary.lastRecordedAt, "2026-05-15T00:01:00.000Z");
+    assert.equal(report.summary.decisionHistogram.skip, 2);
+    assert.equal(report.summary.riskResultHistogram.blocked, 2);
+    assert.equal(report.summary.vetoHistogram["provider-not-connected"], 2);
+    assert.equal(report.summary.vetoHistogram["execution-route-absent"], 2);
+    assert.deepEqual(report.summary.redaction, {
+      accountIdentifiers: "redacted",
+      rawProviderPayloads: "absent",
+      providerCall: "not-attempted",
+      executionRoute: "absent",
+    });
+    assert.deepEqual(report.records.map((record) => record.tradeLog.providerCall), [
+      "not-attempted",
+      "not-attempted",
+    ]);
+    assert.deepEqual(report.records.map((record) => record.tradeLog.executionRoute), [
+      "absent",
+      "absent",
+    ]);
+    assert.equal(serialized.includes("acct-real-123"), false);
+    assert.equal(serialized.includes("secret-token"), false);
+    assert.equal(serialized.includes("portfolioBalance"), false);
+    assert.equal(serialized.includes('"execute"'), false);
+    assert.equal(serialized.includes('"enabled"'), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("empty simulation ledger report remains synthetic and execution disabled", () => {
+  const report = buildSimulationLedgerReport({
+    generatedAt: new Date("2026-05-15T01:00:00.000Z"),
+  });
+
+  assert.equal(report.summary.recordCount, 0);
+  assert.equal(report.summary.firstRecordedAt, null);
+  assert.equal(report.summary.lastRecordedAt, null);
+  assert.deepEqual(report.summary.strategyIds, []);
+  assert.deepEqual(report.records, []);
+  assert.equal(report.providerCalls, "blocked");
+  assert.equal(report.executionRoutes, "absent");
+  assert.equal(report.demoExecution, "blocked");
+  assert.equal(report.liveExecution, "blocked");
 });
 
 test("trade log redaction preserves safe synthetic fields", () => {

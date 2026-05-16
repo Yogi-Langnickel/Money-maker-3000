@@ -29,6 +29,14 @@ private provider state.
 The ledger is a simulation audit trail, not an execution log. Provider calls,
 demo trading, and live trading remain blocked.
 
+`src/ledger.mjs` can export a redacted simulation ledger report DTO from JSONL
+records. The report summarizes synthetic record counts, decisions, risk
+results, veto histograms, strategy IDs, and record time bounds for dashboard
+consumption. It intentionally omits private provider payloads and account-like
+fields, and carries explicit `providerCalls: "blocked"`,
+`executionRoutes: "absent"`, `demoExecution: "blocked"`, and
+`liveExecution: "blocked"` fields.
+
 ## Provider Metadata
 
 `src/providers.mjs` exposes a provider registry and metadata snapshot for
