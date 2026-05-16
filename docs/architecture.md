@@ -49,6 +49,33 @@ credentials, loaded account data, demo/live execution, non-simulation modes, or
 enabled capabilities. It is a contract scaffold only and must not become an
 adapter or credential boundary without a separate review gate.
 
+## Provider Input Order
+
+Provider work should proceed in this order:
+
+1. Historical market-data inputs.
+2. Strategy backtest fixtures and deterministic diagnostics.
+3. Read-only portfolio-state snapshots.
+4. Reconciliation records.
+5. Demo execution design.
+
+Historical market data comes first because it improves strategy evaluation
+without requiring account-linked persistence. Portfolio state and reconciliation
+records can expose holdings, balances, position ids, provider correlation ids,
+or account behavior, so they remain blocked until a private worker-side storage
+boundary exists.
+
+The eToro Dashboard should not durably store account-linked data. It may use
+live read-only responses and short in-memory server cache/backoff metadata for
+freshness and rate-limit protection. Any future account-linked history belongs
+in a private worker-side store with explicit retention, redaction, encryption,
+and audit rules.
+
+Demo execution approval means permission to design and call eToro demo mutation
+endpoints. That is not approved by backtest work, read-only provider work, or
+simulation ledgers. Until a separate approval exists, `execute` mode stays
+rejected and provider execution calls remain absent.
+
 ## Synthetic Backtest/Performance Summary
 
 The first performance review path is synthetic diagnostics, not trading

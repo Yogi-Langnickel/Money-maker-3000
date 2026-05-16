@@ -51,6 +51,9 @@ mode exists.
 
 - Predefined strategy registry only.
 - Explicit run mode contract: `backtest` is allowed, `execute` is disabled.
+- Next provider-adjacent implementation should start with historical
+  market-data inputs for selected instruments. Portfolio state, reconciliation
+  records, and demo execution remain separate later gates.
 - Selected instrument contract with symbol, market group, and instrument class.
 - Canonical simulation contract in `src/simulation-contract.mjs`, using market
   groups `US_EQUITIES`, `AU_EQUITIES`, `FOREX`, and `COMMODITIES`.
@@ -62,6 +65,7 @@ mode exists.
   calls, account data, order previews, demo execution, and live execution.
 - Synthetic backtest/performance summary for veto and warning coverage.
 - No provider calls, no execution routes, no live trading.
+- No durable dashboard storage of account-linked data.
 
 ## Safety Defaults
 
