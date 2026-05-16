@@ -1,5 +1,6 @@
 import { buildSimulationRun } from "./contracts.mjs";
 import { buildLedgerRecord } from "./ledger.mjs";
+import { summarizeMarketHistoryBars } from "./market-history.mjs";
 
 const DEFAULT_SCENARIOS = Object.freeze([
   Object.freeze({ scenarioId: "dca-500", strategyId: "dca-cash-reserve", budgetUsd: 500 }),
@@ -169,6 +170,76 @@ export function buildSelectedBacktest({
       },
     ],
   });
+}
+
+export function buildHistoricalFixtureBacktest({
+  bars,
+  strategyId = "dca-cash-reserve",
+  selectedInstrument,
+  budgetUsd = 1000,
+  startedAt = new Date("2026-05-15T00:00:00.000Z"),
+} = {}) {
+  const history = summarizeMarketHistoryBars(bars);
+  const run = buildSimulationRun({
+    strategyId,
+    now: startedAt,
+    simulationConfig: {
+      runMode: "backtest",
+      budgetUsd,
+      selectedInstrument: {
+        ...(selectedInstrument ?? {}),
+        symbol: history.symbol,
+      },
+    },
+  });
+  const warningHistogram = {};
+  const configErrorHistogram = {};
+  const vetoHistogram = {};
+
+  incrementHistogram(warningHistogram, run.configValidation.warnings);
+  incrementHistogram(configErrorHistogram, run.configValidation.errors);
+  incrementHistogram(vetoHistogram, run.vetoes);
+
+  return {
+    mode: "historical-fixture-backtest",
+    environment: "offline-fixture",
+    providerCalls: "blocked",
+    executionRoutes: "absent",
+    accountData: "absent",
+    startedAt: startedAt.toISOString(),
+    history,
+    summary: {
+      runCount: 1,
+      skipCount: run.decision === "skip" ? 1 : 0,
+      blockedCount: run.riskResult === "blocked" ? 1 : 0,
+      configValidCount: run.configValidation.ok ? 1 : 0,
+      configInvalidCount: run.configValidation.ok ? 0 : 1,
+      vetoHistogram,
+      warningHistogram,
+      configErrorHistogram,
+    },
+    scenarioSummaries: [
+      buildScenarioSummary({
+        scenario: {
+          scenarioId: `${strategyId}-${history.symbol}-historical-fixture`,
+        },
+        run,
+        index: 0,
+      }),
+    ],
+    runs: [
+      {
+        runId: run.runId,
+        strategyId: run.strategyId,
+        decision: run.decision,
+        riskResult: run.riskResult,
+        budgetRemainingUsd: run.budget.remainingUsd,
+        vetoes: run.vetoes,
+        configWarnings: run.configValidation.warnings,
+      },
+    ],
+    ledgerRecords: [],
+  };
 }
 
 export { DEFAULT_SCENARIOS };
