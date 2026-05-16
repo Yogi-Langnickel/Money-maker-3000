@@ -30,6 +30,7 @@ import {
   validateProviderMetadata,
 } from "../src/providers.mjs";
 import {
+  exportLedgerReportCli,
   parseWorkerCliArgs,
   runOnce,
   runOnceAndAppendLedger,
@@ -400,6 +401,56 @@ test("worker CLI accepts backtest selection and rejects execution mode before ru
   );
   assert.throws(
     () => parseWorkerCliArgs(["--mode=trading", "--strategy=dca-cash-reserve"]),
+    /execution mode is disabled/,
+  );
+});
+
+test("worker CLI can export a redacted simulation ledger report", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "money-maker-cli-ledger-report-"));
+  const ledgerPath = join(tempDir, "simulation-ledger.jsonl");
+
+  try {
+    const run = buildSimulationRun({
+      now: new Date("2026-05-15T00:00:00.000Z"),
+    });
+    await appendSimulationLedgerRecord(
+      ledgerPath,
+      buildLedgerRecord({
+        run,
+        entry: {
+          ...run.tradeLogEntry,
+          accountId: "acct-real-123",
+          accessToken: "secret-token",
+        },
+      }),
+    );
+
+    const options = parseWorkerCliArgs(["--ledger-report", ledgerPath]);
+    const report = await exportLedgerReportCli(options);
+    const serialized = JSON.stringify(report);
+
+    assert.deepEqual(options, {
+      command: "ledger-report",
+      ledgerPath,
+      runMode: "backtest",
+    });
+    assert.equal(report.mode, "simulation-ledger-report");
+    assert.equal(report.summary.recordCount, 1);
+    assert.equal(report.providerCalls, "blocked");
+    assert.equal(report.executionRoutes, "absent");
+    assert.equal(report.demoExecution, "blocked");
+    assert.equal(report.liveExecution, "blocked");
+    assert.equal(report.records[0].tradeLog.accountIdentifiers, "redacted");
+    assert.equal(serialized.includes("acct-real-123"), false);
+    assert.equal(serialized.includes("secret-token"), false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("worker CLI rejects execution mode before ledger report export", () => {
+  assert.throws(
+    () => parseWorkerCliArgs(["--mode", "execute", "--ledger-report", "simulation-ledger.jsonl"]),
     /execution mode is disabled/,
   );
 });

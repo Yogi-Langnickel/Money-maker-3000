@@ -1,6 +1,10 @@
 import { buildSelectedBacktest } from "./backtest.mjs";
 import { buildSimulationRun } from "./contracts.mjs";
-import { appendSimulationLedgerRecord, buildLedgerRecord } from "./ledger.mjs";
+import {
+  appendSimulationLedgerRecord,
+  buildLedgerRecord,
+  exportSimulationLedgerReport,
+} from "./ledger.mjs";
 
 const CLI_OPTION_ALIASES = Object.freeze({
   "--mode": "runMode",
@@ -10,6 +14,8 @@ const CLI_OPTION_ALIASES = Object.freeze({
   "--symbol": "symbol",
   "--market": "market",
   "--instrument-class": "instrumentClass",
+  "--ledger-report": "ledgerReportPath",
+  "--export-ledger-report": "ledgerReportPath",
 });
 
 function readCliOptionValue(args, index, rawArg) {
@@ -52,6 +58,14 @@ export function parseWorkerCliArgs(args = []) {
   const runMode = parsed.runMode ?? "backtest";
   if (["execute", "trade", "trading"].includes(runMode)) {
     throw new Error("execution mode is disabled; only backtest mode is currently allowed");
+  }
+
+  if (parsed.ledgerReportPath) {
+    return {
+      command: "ledger-report",
+      ledgerPath: parsed.ledgerReportPath,
+      runMode,
+    };
   }
 
   const selectedInstrument =
@@ -104,9 +118,25 @@ export async function runOnceAndAppendLedger({ ledgerPath, ...options } = {}) {
   };
 }
 
+export async function exportLedgerReportCli({ ledgerPath, runMode } = {}) {
+  if (runMode && runMode !== "backtest") {
+    throw new Error("execution mode is disabled; only backtest mode is currently allowed");
+  }
+
+  if (!ledgerPath) {
+    throw new Error("ledger path is required");
+  }
+
+  return exportSimulationLedgerReport(ledgerPath);
+}
+
 if (process.argv[1] === new URL(import.meta.url).pathname) {
   try {
-    const result = runSelectedBacktest(parseWorkerCliArgs(process.argv.slice(2)));
+    const options = parseWorkerCliArgs(process.argv.slice(2));
+    const result =
+      options.command === "ledger-report"
+        ? await exportLedgerReportCli(options)
+        : runSelectedBacktest(options);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`${error.message}\n`);

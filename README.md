@@ -23,6 +23,17 @@ npm run start -- --mode backtest --strategy threshold-rebalance --symbol GLD --m
 `--mode execute` is intentionally rejected until a separate reviewed execution
 path exists.
 
+To export a redacted dashboard DTO from an existing local simulation ledger
+JSONL file:
+
+```sh
+npm run start -- --ledger-report .local/simulation-ledger.jsonl
+```
+
+The ledger report export only reads local synthetic records and preserves
+blocked provider calls, absent execution routes, and blocked demo/live
+execution.
+
 ## Validate
 
 ```sh

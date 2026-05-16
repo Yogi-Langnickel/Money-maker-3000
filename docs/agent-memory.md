@@ -39,6 +39,8 @@ Created: 2026-05-15
 - `npm run start`: run one synthetic simulation and print the DTO.
 - `npm run start -- --mode backtest --strategy threshold-rebalance --symbol GLD --market COMMODITIES --instrument-class ETF`:
   run one synthetic backtest-mode DTO for a selected strategy/instrument.
+- `npm run start -- --ledger-report .local/simulation-ledger.jsonl`:
+  export a redacted dashboard DTO from an existing local synthetic ledger.
 
 ## Performance And Context Notes
 
