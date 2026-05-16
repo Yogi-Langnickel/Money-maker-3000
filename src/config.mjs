@@ -4,12 +4,16 @@ import {
   SIMULATION_INSTRUMENT_CLASSES,
   SIMULATION_MARKET_INSTRUMENT_CLASS_RULES,
   SIMULATION_MARKETS,
+  SIMULATION_RUN_MODES,
 } from "./simulation-contract.mjs";
 
 export const ALLOWED_MARKETS = SIMULATION_MARKETS;
 export const ALLOWED_INSTRUMENT_CLASSES = SIMULATION_INSTRUMENT_CLASSES;
 export const BLOCKED_INSTRUMENT_CLASSES = BLOCKED_SIMULATION_INSTRUMENT_CLASSES;
+export const ALLOWED_RUN_MODES = SIMULATION_RUN_MODES;
 export { DEFAULT_SIMULATION_CONFIG };
+
+const SYMBOL_PATTERN = /^[A-Z0-9][A-Z0-9.-]{0,14}$/;
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -68,6 +72,32 @@ export function validateSimulationConfig(
     errors.push("live strategies are not allowed");
   }
 
+  if (!ALLOWED_RUN_MODES.includes(config.runMode)) {
+    errors.push(`run mode must be one of: ${ALLOWED_RUN_MODES.join(", ")}`);
+  } else if (config.runMode === "execute") {
+    errors.push("execution mode is disabled; only backtest mode is currently allowed");
+  }
+
+  if (!isPlainObject(config.selectedInstrument)) {
+    errors.push("selected instrument is required");
+  } else {
+    if (!SYMBOL_PATTERN.test(config.selectedInstrument.symbol ?? "")) {
+      errors.push("selected instrument symbol must be an uppercase market symbol");
+    }
+
+    if (!ALLOWED_MARKETS.includes(config.selectedInstrument.market)) {
+      errors.push("selected instrument market is unsupported");
+    }
+
+    if (!ALLOWED_INSTRUMENT_CLASSES.includes(config.selectedInstrument.instrumentClass)) {
+      errors.push("selected instrument class is unsupported");
+    }
+
+    if (BLOCKED_INSTRUMENT_CLASSES.includes(config.selectedInstrument.instrumentClass)) {
+      errors.push("selected instrument class is blocked");
+    }
+  }
+
   if (!Number.isFinite(config.budgetUsd) || config.budgetUsd <= 0) {
     errors.push("budget must be a positive USD amount");
   }
@@ -120,6 +150,31 @@ export function validateSimulationConfig(
     );
   }
 
+  if (isPlainObject(config.selectedInstrument)) {
+    const selectedMarket = config.selectedInstrument.market;
+    const selectedInstrumentClass = config.selectedInstrument.instrumentClass;
+    const selectedMarketClasses = SIMULATION_MARKET_INSTRUMENT_CLASS_RULES[selectedMarket] ?? [];
+
+    if (Array.isArray(config.allowedMarkets) && !config.allowedMarkets.includes(selectedMarket)) {
+      errors.push("selected instrument market must be included in allowed markets");
+    }
+
+    if (
+      Array.isArray(config.allowedInstrumentClasses) &&
+      !config.allowedInstrumentClasses.includes(selectedInstrumentClass)
+    ) {
+      errors.push("selected instrument class must be included in allowed instrument classes");
+    }
+
+    if (
+      ALLOWED_MARKETS.includes(selectedMarket) &&
+      ALLOWED_INSTRUMENT_CLASSES.includes(selectedInstrumentClass) &&
+      !selectedMarketClasses.includes(selectedInstrumentClass)
+    ) {
+      errors.push("selected instrument class is not supported by its market");
+    }
+  }
+
   const strategyBlockedMarkets = listStrategyBlockedValues(config.allowedMarkets, strategy?.allowedMarkets);
   if (strategyBlockedMarkets.length > 0) {
     errors.push(
@@ -135,6 +190,16 @@ export function validateSimulationConfig(
     errors.push(
       `allowed instrument classes are not allowed for ${strategy.strategyId}: ${strategyBlockedInstrumentClasses.join(", ")}`,
     );
+  }
+
+  if (strategy && isPlainObject(config.selectedInstrument)) {
+    if (!strategy.allowedMarkets.includes(config.selectedInstrument.market)) {
+      errors.push(`selected instrument market is not allowed for ${strategy.strategyId}`);
+    }
+
+    if (!strategy.allowedInstrumentClasses.includes(config.selectedInstrument.instrumentClass)) {
+      errors.push(`selected instrument class is not allowed for ${strategy.strategyId}`);
+    }
   }
 
   if (!isPlainObject(config.cadence)) {

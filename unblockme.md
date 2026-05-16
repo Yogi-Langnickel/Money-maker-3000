@@ -3,20 +3,17 @@
 Status: non-blocking for simulation implementation  
 Created: 2026-05-15
 
-Simulation work can continue locally. These items block remote PR flow,
-provider mode, or any execution capability.
+Simulation work can continue locally. These items block provider mode or any
+execution capability. Review ownership remains the only open Git Flow decision.
 
 ## Git Flow
 
-- No remote is configured for this repository.
-- Current implementation work is on `feature/simulation-worker-scaffold`.
-- Before a PR/review flow exists, configure a remote and decide whether
-  `develop` should be the integration branch.
+- `origin` is configured at `https://github.com/Yogi-Langnickel/Money-maker-3000.git`.
+- `develop` tracks `origin/develop` and should remain the integration branch.
+- Use scoped feature branches from `develop` for new PR/review work.
 
 Unblock questions:
 
-1. What Git remote URL should this repository use?
-1. Should completed work target `develop` as the integration branch?
 1. Who should review simulation contract changes before merge?
 
 ## Provider And Performance Inputs

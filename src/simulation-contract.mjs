@@ -15,6 +15,7 @@ export const BLOCKED_SIMULATION_INSTRUMENT_CLASSES = Object.freeze([
   "DERIVATIVE",
   "OPTION",
 ]);
+export const SIMULATION_RUN_MODES = Object.freeze(["backtest", "execute"]);
 export const SIMULATION_CADENCES = Object.freeze(["daily", "weekly"]);
 export const MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES = 240;
 export const MAX_SIMULATION_DECISIONS_PER_DAY = 3;
@@ -54,7 +55,13 @@ export const SIMULATION_STRATEGY_CONFIG_RULES = Object.freeze({
 });
 
 export const DEFAULT_SIMULATION_CONFIG = Object.freeze({
+  runMode: "backtest",
   strategyId: "dca-cash-reserve",
+  selectedInstrument: Object.freeze({
+    symbol: "SPY",
+    market: "US_EQUITIES",
+    instrumentClass: "ETF",
+  }),
   budgetUsd: 1000,
   allowedMarkets: Object.freeze(["US_EQUITIES", "AU_EQUITIES"]),
   allowedInstrumentClasses: Object.freeze(["EQUITY", "ETF"]),
@@ -81,6 +88,7 @@ export const SIMULATION_CONFIG_CONTRACT = Object.freeze({
   markets: SIMULATION_MARKETS,
   instrumentClasses: SIMULATION_INSTRUMENT_CLASSES,
   blockedInstrumentClasses: BLOCKED_SIMULATION_INSTRUMENT_CLASSES,
+  runModes: SIMULATION_RUN_MODES,
   marketInstrumentClassRules: SIMULATION_MARKET_INSTRUMENT_CLASS_RULES,
   cadences: SIMULATION_CADENCES,
   minimumEvaluationIntervalMinutes: MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES,
@@ -96,6 +104,9 @@ export function defaultSimulationConfigForStrategy(strategyId = DEFAULT_SIMULATI
   return {
     ...DEFAULT_SIMULATION_CONFIG,
     strategyId,
+    selectedInstrument: {
+      ...DEFAULT_SIMULATION_CONFIG.selectedInstrument,
+    },
     allowedMarkets: [...strategyRule.allowedMarkets],
     allowedInstrumentClasses: [...strategyRule.allowedInstrumentClasses],
     cadence: {

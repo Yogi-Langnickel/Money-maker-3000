@@ -35,6 +35,12 @@ test("synthetic backtest summarizes deterministic blocked simulation runs", () =
     report.scenarioSummaries.map((scenario) => scenario.scenarioId),
     ["dca-500", "dca-1000", "rebalance-1500", "watchlist-1000"],
   );
+  assert.equal(report.scenarioSummaries.every((scenario) => scenario.runMode === "backtest"), true);
+  assert.deepEqual(report.scenarioSummaries[0].selectedInstrument, {
+    symbol: "SPY",
+    market: "US_EQUITIES",
+    instrumentClass: "ETF",
+  });
   assert.deepEqual(
     report.scenarioSummaries.map((scenario) => scenario.providerCalls),
     ["blocked", "blocked", "blocked", "blocked"],

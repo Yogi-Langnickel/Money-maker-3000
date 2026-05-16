@@ -50,7 +50,9 @@ function buildScenarioSummary({ scenario, run, index }) {
   return {
     scenarioId,
     runId: run.runId,
+    runMode: run.simulationConfig.runMode,
     strategyId: run.strategyId,
+    selectedInstrument: run.simulationConfig.selectedInstrument,
     decision: run.decision,
     riskResult: run.riskResult,
     requestedBudgetUsd: run.simulationConfig.budgetUsd,
@@ -145,6 +147,28 @@ export function buildSyntheticBacktest({
       ? runs.map((run) => buildLedgerRecord({ run }))
       : [],
   };
+}
+
+export function buildSelectedBacktest({
+  strategyId = "dca-cash-reserve",
+  selectedInstrument,
+  budgetUsd = 1000,
+  startedAt = new Date("2026-05-15T00:00:00.000Z"),
+} = {}) {
+  return buildSyntheticBacktest({
+    startedAt,
+    scenarios: [
+      {
+        scenarioId: `${strategyId}-selected-instrument`,
+        strategyId,
+        budgetUsd,
+        simulationConfig: {
+          runMode: "backtest",
+          ...(selectedInstrument ? { selectedInstrument } : {}),
+        },
+      },
+    ],
+  });
 }
 
 export { DEFAULT_SCENARIOS };

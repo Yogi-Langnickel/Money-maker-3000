@@ -14,9 +14,11 @@ Created: 2026-05-15
   simulation-safe statuses, low-frequency cadence, and instrument metadata
   before run DTOs are returned.
 - `src/simulation-contract.mjs` owns the canonical simulation config mirror
-  shape for dashboard consumers: market groups are `US_EQUITIES`,
+  shape for dashboard consumers: run modes are `backtest` and `execute`
+  (`execute` is rejected/disabled), market groups are `US_EQUITIES`,
   `AU_EQUITIES`, `FOREX`, and `COMMODITIES`; selected config must satisfy the
-  chosen strategy's allowed markets, allowed instrument classes, and cadence.
+  chosen strategy's selected instrument, allowed markets, allowed instrument
+  classes, and cadence.
 - Current performance diagnostics are synthetic only: run counts, skipped and
   blocked decisions, deterministic scenario summaries, veto histograms, warning
   histograms, config error histograms, no-HFT cadence counts, and budget ranges.
@@ -31,6 +33,8 @@ Created: 2026-05-15
 
 - `npm run check`: run the current Node test suite.
 - `npm run start`: run one synthetic simulation and print the DTO.
+- `npm run start -- --mode backtest --strategy threshold-rebalance --symbol GLD --market COMMODITIES --instrument-class ETF`:
+  run one synthetic backtest-mode DTO for a selected strategy/instrument.
 
 ## Performance And Context Notes
 

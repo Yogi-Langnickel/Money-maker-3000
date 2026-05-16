@@ -27,7 +27,12 @@ import {
   buildProviderMetadataSnapshot,
   validateProviderMetadata,
 } from "../src/providers.mjs";
-import { runOnceAndAppendLedger } from "../src/worker.mjs";
+import {
+  parseWorkerCliArgs,
+  runOnce,
+  runOnceAndAppendLedger,
+  runSelectedBacktest,
+} from "../src/worker.mjs";
 
 test("strategy registry is predefined and simulation safe", () => {
   const result = validateStrategyRegistry(STRATEGY_REGISTRY);
@@ -184,6 +189,13 @@ test("simulation config validates predefined strategy, budget, markets, instrume
 
   assert.equal(result.ok, true);
   assert.equal(SIMULATION_CONFIG_CONTRACT.source, "Money-maker-3000/src/simulation-contract.mjs");
+  assert.deepEqual(SIMULATION_CONFIG_CONTRACT.runModes, ["backtest", "execute"]);
+  assert.equal(DEFAULT_SIMULATION_CONFIG.runMode, "backtest");
+  assert.deepEqual(DEFAULT_SIMULATION_CONFIG.selectedInstrument, {
+    symbol: "SPY",
+    market: "US_EQUITIES",
+    instrumentClass: "ETF",
+  });
   assert.deepEqual(DEFAULT_SIMULATION_CONFIG.allowedMarkets, ["US_EQUITIES", "AU_EQUITIES"]);
   assert.deepEqual(DEFAULT_SIMULATION_CONFIG.allowedInstrumentClasses, ["EQUITY", "ETF"]);
   assert.equal(DEFAULT_SIMULATION_CONFIG.cadence.frequency, "daily");
@@ -196,6 +208,12 @@ test("simulation config rejects unregistered strategies, blocked instruments, HF
     {
       ...DEFAULT_SIMULATION_CONFIG,
       strategyId: "operator-uploaded-code",
+      runMode: "execute",
+      selectedInstrument: {
+        symbol: "BTC-USD",
+        market: "BINANCE",
+        instrumentClass: "CRYPTO",
+      },
       budgetUsd: 5000,
       allowedMarkets: ["US_EQUITIES", "BINANCE"],
       allowedInstrumentClasses: ["EQUITY", "CRYPTO"],
@@ -220,6 +238,9 @@ test("simulation config rejects unregistered strategies, blocked instruments, HF
 
   assert.equal(result.ok, false);
   assert.match(result.errors.join(" "), /predefined registry/);
+  assert.match(result.errors.join(" "), /execution mode is disabled/);
+  assert.match(result.errors.join(" "), /selected instrument market is unsupported/);
+  assert.match(result.errors.join(" "), /selected instrument class is unsupported/);
   assert.match(result.errors.join(" "), /maximum configurable budget/);
   assert.match(result.errors.join(" "), /unsupported markets/);
   assert.match(result.errors.join(" "), /unsupported instrument classes/);
@@ -275,6 +296,110 @@ test("simulation config enforces strategy-specific market, instrument-class, and
   assert.match(thresholdDaily.errors.join(" "), /cadence frequency is not allowed for threshold-rebalance/);
   assert.equal(mismatchedMarketClass.ok, false);
   assert.match(mismatchedMarketClass.errors.join(" "), /instrument classes not supported by selected markets/);
+});
+
+test("simulation config validates a selected strategy and instrument for backtest mode", () => {
+  const run = buildSimulationRun({
+    strategyId: "threshold-rebalance",
+    simulationConfig: {
+      runMode: "backtest",
+      selectedInstrument: {
+        symbol: "GLD",
+        market: "COMMODITIES",
+        instrumentClass: "ETF",
+      },
+      budgetUsd: 1500,
+    },
+  });
+
+  assert.equal(run.simulationConfig.runMode, "backtest");
+  assert.equal(run.strategyId, "threshold-rebalance");
+  assert.deepEqual(run.simulationConfig.selectedInstrument, {
+    symbol: "GLD",
+    market: "COMMODITIES",
+    instrumentClass: "ETF",
+  });
+  assert.equal(run.configValidation.ok, true);
+  assert.equal(run.vetoes.includes("execution-route-absent"), true);
+});
+
+test("simulation config rejects execution mode and incompatible selected instruments", () => {
+  const executionMode = validateSimulationConfig(
+    {
+      ...defaultSimulationConfigForStrategy("dca-cash-reserve"),
+      runMode: "execute",
+    },
+    {
+      strategyRegistry: STRATEGY_REGISTRY,
+      budgetPolicy: DEFAULT_BUDGET_POLICY,
+      schedulePolicy: DEFAULT_SCHEDULE_POLICY,
+    },
+  );
+  const incompatibleInstrument = validateSimulationConfig(
+    {
+      ...defaultSimulationConfigForStrategy("dca-cash-reserve"),
+      selectedInstrument: {
+        symbol: "GLD",
+        market: "COMMODITIES",
+        instrumentClass: "COMMODITY",
+      },
+    },
+    {
+      strategyRegistry: STRATEGY_REGISTRY,
+      budgetPolicy: DEFAULT_BUDGET_POLICY,
+      schedulePolicy: DEFAULT_SCHEDULE_POLICY,
+    },
+  );
+
+  assert.equal(executionMode.ok, false);
+  assert.match(executionMode.errors.join(" "), /execution mode is disabled/);
+  assert.equal(incompatibleInstrument.ok, false);
+  assert.match(incompatibleInstrument.errors.join(" "), /selected instrument market must be included/);
+  assert.match(incompatibleInstrument.errors.join(" "), /selected instrument class must be included/);
+  assert.match(incompatibleInstrument.errors.join(" "), /selected instrument market is not allowed/);
+  assert.match(incompatibleInstrument.errors.join(" "), /selected instrument class is not allowed/);
+});
+
+test("worker CLI accepts backtest selection and rejects execution mode before running", () => {
+  const options = parseWorkerCliArgs([
+    "--mode",
+    "backtest",
+    "--strategy",
+    "threshold-rebalance",
+    "--symbol",
+    "GLD",
+    "--market",
+    "COMMODITIES",
+    "--instrument-class",
+    "ETF",
+  ]);
+  const run = runOnce(options);
+
+  assert.equal(run.simulationConfig.runMode, "backtest");
+  assert.equal(run.strategyId, "threshold-rebalance");
+  assert.deepEqual(run.simulationConfig.selectedInstrument, {
+    symbol: "GLD",
+    market: "COMMODITIES",
+    instrumentClass: "ETF",
+  });
+  assert.equal(run.configValidation.ok, true);
+  const backtestReport = runSelectedBacktest(options);
+  assert.equal(backtestReport.mode, "synthetic-backtest");
+  assert.equal(backtestReport.summary.runCount, 1);
+  assert.equal(backtestReport.scenarioSummaries[0].runMode, "backtest");
+  assert.deepEqual(backtestReport.scenarioSummaries[0].selectedInstrument, {
+    symbol: "GLD",
+    market: "COMMODITIES",
+    instrumentClass: "ETF",
+  });
+  assert.throws(
+    () => parseWorkerCliArgs(["--mode=execute", "--strategy=dca-cash-reserve"]),
+    /execution mode is disabled/,
+  );
+  assert.throws(
+    () => parseWorkerCliArgs(["--mode=trading", "--strategy=dca-cash-reserve"]),
+    /execution mode is disabled/,
+  );
 });
 
 test("simulation run surfaces invalid config as a risk veto", () => {

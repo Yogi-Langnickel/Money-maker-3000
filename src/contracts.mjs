@@ -264,6 +264,10 @@ export function buildSimulationRun({
     ...baseSimulationConfig,
     ...simulationConfig,
     strategyId: requestedStrategyId,
+    selectedInstrument: {
+      ...baseSimulationConfig.selectedInstrument,
+      ...simulationConfig?.selectedInstrument,
+    },
     cadence: {
       ...baseSimulationConfig.cadence,
       ...simulationConfig?.cadence,
@@ -320,7 +324,9 @@ export function buildSimulationRun({
     schedulePolicy,
     strategyRegistryValidation,
     simulationConfig: {
+      runMode: effectiveSimulationConfig.runMode,
       strategyId: effectiveStrategyId,
+      selectedInstrument: effectiveSimulationConfig.selectedInstrument,
       budgetUsd: effectiveSimulationConfig.budgetUsd,
       allowedMarkets: effectiveSimulationConfig.allowedMarkets,
       allowedInstrumentClasses: effectiveSimulationConfig.allowedInstrumentClasses,
