@@ -29,6 +29,14 @@ Created: 2026-05-15
 - Provider readiness metadata is metadata-only and explicitly blocks provider
   calls, credentials, account data, order previews, demo execution, and live
   execution.
+- Provider work should proceed in this order: historical market-data inputs,
+  deterministic backtest fixtures, read-only portfolio-state snapshots, then
+  reconciliation records. Demo execution is a later separate design and is not
+  approved by historical data or read-only portfolio work.
+- The eToro Dashboard should not durably store account-linked data. It may use
+  live read-only data and short in-memory server cache/backoff metadata only;
+  future account-linked history belongs in a private worker-side store with
+  explicit retention/redaction/audit rules.
 - Do not report real PnL, win rate, drawdown, Sharpe ratio, or execution quality
   until provider history, market data, portfolio state, and reconciliation
   inputs are explicitly designed and reviewed.
@@ -56,4 +64,6 @@ Created: 2026-05-15
 
 - `AGENTS.md` for hard safety rules.
 - `docs/architecture.md` for simulation ledger and backtest/performance shape.
+- `docs/provider-boundary-decisions.md` before provider, storage, portfolio, or
+  execution work.
 - `unblockme.md` before provider, git remote, or execution work.
