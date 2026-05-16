@@ -37,8 +37,30 @@ balances:
 - `availableUsd`
 - `maxOrderUsd`
 
+The current future-demo planning defaults are a USD 10,000 bot allocation, USD
+500 maximum order size, 20 maximum open positions, 10% maximum daily drawdown,
+and 25% maximum weekly drawdown. These values are documentation inputs only
+until demo execution is separately implemented and approved.
+
 Provider/demo balances are read-only reconciliation inputs only. They are never
 used as sizing inputs and are redacted from audit records and reports.
+
+## EC2 And DynamoDB Direction
+
+When the worker moves to a dedicated EC2 instance, DynamoDB is the preferred
+durable worker-side store. It fits the expected access pattern better than
+Google Sheets because the bot needs conditional writes, idempotency keys,
+append-only audit events, state transitions, and reliable reconciliation
+history.
+
+Secrets on EC2 should be loaded from AWS Secrets Manager through IAM. Google
+Sheets can still receive redacted reporting exports for human review, but the
+sheet must not be the source of truth for trade state or reconciliation.
+
+Recommended retention is 7 years for order/risk/reconciliation audit records,
+90 days of detailed portfolio snapshots compacted into daily summaries, 30 days
+maximum for any explicitly approved redacted raw-provider debugging payloads,
+and no default persistence of raw provider payloads.
 
 ## Risk Gate
 
@@ -121,6 +143,10 @@ Demo execution approval means permission to design and call eToro demo mutation
 endpoints. That approval is not implied by backtests, read-only provider work,
 or simulation ledgers. Until a separate approval exists, `execute` mode stays
 rejected and provider execution calls remain absent.
+
+When demo execution is later approved, start with limit orders and mandatory
+order preview. Market orders should remain disabled until slippage controls,
+preview semantics, and reconciliation are proven.
 
 ## Not Implemented
 
