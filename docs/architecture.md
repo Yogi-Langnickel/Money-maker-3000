@@ -19,6 +19,8 @@ The runtime package lives under `src/money_maker_3000/`.
   accumulator.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
 - `ledger.py`: redacted append/read/report JSONL audit records.
+- `reconciliation.py`: simulation-only reconciliation records that redact
+  provider/account fields and feed the pure risk-state contract.
 - `providers.py`: metadata-only provider boundary and disabled execution
   gateway contract.
 - `cli.py`: `backtest` and `ledger-report` commands.
@@ -44,6 +46,12 @@ until demo execution is separately implemented and approved.
 
 Provider/demo balances are read-only reconciliation inputs only. They are never
 used as sizing inputs and are redacted from audit records and reports.
+
+`reconciliation.py` accepts caller-supplied synthetic/read-only reconciliation
+context only. It performs no provider calls, persists no account-linked data,
+redacts provider balance/account identifiers in DTOs, and only marks
+reconciliation available when provider state is known-read-only and loss,
+drawdown, exposure, and open-position context are complete.
 
 ## EC2 And DynamoDB Direction
 

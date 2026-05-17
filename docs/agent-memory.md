@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-05-17
+Updated: 2026-05-18
 
 ## Current Truth
 
@@ -39,6 +39,9 @@ Updated: 2026-05-17
 - `ledger.py` writes/reads redacted local JSONL audit records with correlation
   IDs, strategy version, config hash, allocation IDs, risk decision, vetoes,
   data freshness, and provider call status.
+- `reconciliation.py` builds simulation-only reconciliation records from
+  caller-supplied synthetic/read-only inputs, redacts provider/account balance
+  fields, and converts available records into `RiskInputState`.
 - Provider readiness metadata is metadata-only and explicitly blocks provider
   calls, credentials, account data, order previews, demo execution, and live
   execution.

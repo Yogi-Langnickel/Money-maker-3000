@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-16
-Updated: 2026-05-17
+Updated: 2026-05-18
 
 ## Decision
 
@@ -14,7 +14,8 @@ Provider work should unlock in this order:
 1. Historical market-data inputs.
 1. Strategy backtest fixtures and deterministic diagnostics.
 1. Read-only portfolio-state snapshots.
-1. Reconciliation records that compare bot state to provider state.
+1. Simulation-only reconciliation records that compare bot state to
+   caller-supplied synthetic/read-only provider context.
 1. Demo execution design.
 
 Live execution remains out of scope. Demo execution remains disabled.
@@ -43,6 +44,11 @@ Risk gates fail closed until provider state is known read-only and
 reconciliation is available. Loss/drawdown stops stay simulation-only until real
 reconciliation exists, and DTOs must say they are not evaluated against real
 PnL.
+
+Current reconciliation core is offline and simulation-only. It accepts
+caller-supplied synthetic/read-only context, redacts provider balance and
+account-linked fields, performs no provider calls, and can feed `RiskInputState`
+only when loss, drawdown, exposure, and open-position inputs are complete.
 
 ## Dashboard Storage Boundary
 

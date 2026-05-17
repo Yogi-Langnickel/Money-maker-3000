@@ -24,6 +24,10 @@ from money_maker_3000.market_history import (
     sha256_file,
     summarize_market_history_bars,
 )
+from money_maker_3000.reconciliation import (
+    build_simulation_reconciliation_record,
+    risk_input_state_from_reconciliation,
+)
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, evaluate_risk_gate, validate_risk_policy
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
@@ -84,6 +88,72 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertIn("per-order-cap", decision["vetoes"])
         self.assertIn("per-instrument-exposure-cap", decision["vetoes"])
         self.assertIn("max-open-positions", decision["vetoes"])
+
+    def test_reconciliation_record_redacts_provider_context_and_feeds_risk_gate(self):
+        allocation = build_allocation_policy(
+            bot_allocation_usd=1000.0,
+            reserved_usd=100.0,
+            provider_demo_balance_usd=1_000_000.0,
+            max_order_usd=250.0,
+        )
+        record = build_simulation_reconciliation_record(
+            allocation_policy=allocation,
+            provider_snapshot={
+                "providerState": "known-read-only",
+                "source": "synthetic",
+                "providerCallStatus": "not-attempted",
+                "accountId": "acct-real-123",
+                "providerDemoBalanceUsd": 1_000_000.0,
+                "positionId": "pos-real-123",
+            },
+            data_freshness="fresh",
+            daily_loss_usd=0.0,
+            weekly_loss_usd=0.0,
+            allocation_drawdown_usd=0.0,
+            instrument_exposure_usd=100.0,
+            open_positions=1,
+        )
+        serialized = json.dumps(record)
+
+        self.assertTrue(record["validation"]["ok"])
+        self.assertEqual(record["reconciliationState"], "available")
+        self.assertEqual(record["providerSnapshot"]["accountId"], "redacted")
+        self.assertEqual(record["providerSnapshot"]["providerDemoBalanceUsd"], "redacted")
+        self.assertEqual(record["providerSnapshot"]["positionId"], "redacted")
+        self.assertNotIn("acct-real-123", serialized)
+        self.assertNotIn("1000000", serialized)
+
+        decision = evaluate_risk_gate(
+            simulation_config=default_simulation_config_for_strategy("dca-cash-reserve"),
+            allocation_policy=allocation,
+            risk_state=risk_input_state_from_reconciliation(record),
+            proposed_order_usd=100.0,
+        )
+
+        self.assertNotIn("unknown-provider-state", decision["vetoes"])
+        self.assertNotIn("missing-reconciliation", decision["vetoes"])
+        self.assertNotIn("missing-loss-reconciliation", decision["vetoes"])
+        self.assertIn("provider-not-connected", decision["vetoes"])
+        self.assertIn("execution-route-absent", decision["vetoes"])
+
+    def test_reconciliation_record_fails_closed_without_loss_context(self):
+        record = build_simulation_reconciliation_record(
+            provider_snapshot={
+                "providerState": "known-read-only",
+                "source": "synthetic",
+                "providerCallStatus": "not-attempted",
+            },
+            data_freshness="fresh",
+        )
+
+        self.assertFalse(record["validation"]["ok"])
+        self.assertEqual(record["reconciliationState"], "missing")
+        self.assertIn("loss reconciliation metrics are required", record["validation"]["problems"])
+
+        risk_state = risk_input_state_from_reconciliation(record)
+        self.assertEqual(risk_state.provider_state, "known-read-only")
+        self.assertEqual(risk_state.reconciliation_state, "missing")
+        self.assertEqual(risk_state.data_freshness, "missing")
 
     def test_streaming_market_history_parser_and_single_pass_summary(self):
         with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
