@@ -16,7 +16,7 @@ The runtime package lives under `src/money_maker_3000/`.
 - `strategies.py`: predefined registry and registry validator.
 - `risk.py`: pure fail-closed risk gate.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
-  accumulator.
+  accumulator plus selected-period market diagnostics for dashboard charting.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
 - `ledger.py`: redacted append/read/report JSONL audit records.
 - `reconciliation.py`: simulation-only reconciliation records that redact
@@ -114,11 +114,17 @@ Backtest DTOs include deterministic metadata:
 - parser version
 - Python version
 - explicit `startedAt`
+- `periodDiagnostics` for `24h`, `1w`, `1m`, `1y`, `5y`, and `max`
 
 Backtest output is diagnostics only: coverage, veto counts, config errors,
 cadence/risk gate behavior, and fixture source/date coverage. It must not
 report real PnL, win rate, Sharpe ratio, drawdown, execution quality, or
 profitability claims.
+
+Period diagnostics are market-history change context only. They include source,
+coverage state, start/end dates, start/end closes, absolute change, percentage
+change, and bar count for the selected window. They are intended for dashboard
+instrument-row charts and must not be described as bot performance.
 
 ## Audit Ledger
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable, Iterator, TextIO
 
@@ -11,6 +11,14 @@ from money_maker_3000.contracts import SYMBOL_PATTERN
 
 PARSER_VERSION = "0.1.0-streaming-stdlib"
 REQUIRED_MARKET_HISTORY_COLUMNS = ("symbol", "date", "open", "high", "low", "close", "volume", "source")
+PERFORMANCE_PERIODS = (
+    ("24h", 1),
+    ("1w", 7),
+    ("1m", 31),
+    ("1y", 366),
+    ("5y", 366 * 5),
+    ("max", None),
+)
 SENSITIVE_COLUMN_MARKERS = (
     "account",
     "balance",
@@ -177,6 +185,91 @@ def summarize_market_history_bars(bars: Iterable[Bar]) -> dict[str, object]:
     for bar in bars:
         accumulator.update(bar)
     return accumulator.to_summary()
+
+
+def build_period_performance_diagnostics(bars: Iterable[Bar]) -> dict[str, object]:
+    """Build market-history change diagnostics without profitability claims."""
+    collected: list[Bar] = []
+    for bar in bars:
+        collected.append(bar)
+    if not collected:
+        raise ValueError("market history bars are required")
+
+    symbol = _summarize_identity(bar.symbol for bar in collected)
+    source = _summarize_identity(bar.source for bar in collected)
+    latest = collected[-1]
+    latest_date = date.fromisoformat(latest.date)
+    periods = [
+        _build_period_diagnostic(period_id, days, collected, latest, latest_date)
+        for period_id, days in PERFORMANCE_PERIODS
+    ]
+    return {
+        "dtoVersion": "market-period-diagnostics.v1",
+        "symbol": symbol,
+        "source": source,
+        "latestDate": latest.date,
+        "latestClose": latest.close,
+        "periods": periods,
+        "providerCalls": "blocked",
+        "accountData": "absent",
+        "execution": "blocked",
+        "parserVersion": PARSER_VERSION,
+        "performanceClaims": "market-history-change-only-no-pnl-or-execution-quality-metrics",
+    }
+
+
+def _summarize_identity(values: Iterable[str]) -> str:
+    seen: str | None = None
+    for value in values:
+        if seen is None:
+            seen = value
+        elif seen != value:
+            return "mixed"
+    if seen is None:
+        raise ValueError("identity values are required")
+    return seen
+
+
+def _build_period_diagnostic(
+    period_id: str,
+    days: int | None,
+    bars: list[Bar],
+    latest: Bar,
+    latest_date: date,
+) -> dict[str, object]:
+    if days is None:
+        window_bars = bars
+        requested_start = None
+        coverage_state = "available" if len(window_bars) >= 2 else "insufficient-history"
+    else:
+        cutoff = latest_date - timedelta(days=days)
+        requested_start = cutoff.isoformat()
+        window_bars = [bar for bar in bars if date.fromisoformat(bar.date) >= cutoff]
+        if len(window_bars) < 2:
+            coverage_state = "insufficient-history"
+        elif date.fromisoformat(window_bars[0].date) > cutoff:
+            coverage_state = "partial-history"
+        else:
+            coverage_state = "available"
+
+    start = window_bars[0]
+    change_absolute = latest.close - start.close
+    change_percent = (change_absolute / start.close) * 100
+    return {
+        "period": period_id,
+        "requestedWindowDays": days,
+        "requestedStartDate": requested_start,
+        "startDate": start.date,
+        "endDate": latest.date,
+        "startClose": start.close,
+        "endClose": latest.close,
+        "changeAbsolute": round(change_absolute, 6),
+        "changePercent": round(change_percent, 6),
+        "barCount": len(window_bars),
+        "coverageState": coverage_state,
+        "source": _summarize_identity(bar.source for bar in window_bars),
+        "performanceClaims": "market-history-change-only",
+    }
 
 
 def sha256_file(path: str | Path) -> str:

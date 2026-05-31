@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-05-18
+Updated: 2026-05-31
 
 ## Current Truth
 
@@ -32,6 +32,12 @@ Updated: 2026-05-18
   state they are not evaluated against real PnL.
 - `market_history.py` provides stdlib streaming CSV/date validation and
   single-pass history summaries.
+- Offline historical fixture coverage now includes `SPY` and `GLD` daily
+  public-test fixtures. Historical backtest reports include
+  `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market
+  change diagnostics for dashboard portfolio charting. The DTO explicitly
+  blocks provider calls, account data, and execution, and carries
+  market-history-only performance claims.
 - Backtests flow as `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary` and
   emit diagnostics only: coverage, veto counts, config errors, cadence/risk
   gate behavior, fixture source/date coverage, input SHA-256, parser version,
@@ -54,7 +60,8 @@ Updated: 2026-05-18
   Python package and tests.
 - `PYTHONPATH=src python3.13 -m unittest discover tests`: run the unittest suite.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest --history-csv tests/fixtures/market_history/spy-daily.csv --started-at 2026-05-15T00:00:00Z`:
-  run the offline fixture diagnostics DTO.
+  run the offline fixture diagnostics DTO, including selected-period market
+  change diagnostics.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report .local/simulation-ledger.jsonl`:
   export a redacted dashboard DTO from an existing local synthetic ledger.
 
@@ -64,6 +71,9 @@ Updated: 2026-05-18
 - Keep CSV parsing streaming and reducer summaries single-pass.
 - Keep cadence low-frequency only; current minimum evaluation interval is 240
   minutes.
+- Period diagnostics may materialize the already parsed tiny fixture bars to
+  compute dashboard windows; do not use that as permission to persist or load
+  account-linked data.
 - Treat future provider rate limits as a budgeted resource before enabling any
   adapter.
 - Keep local ledgers, generated reports, profiles, caches, and provider-like

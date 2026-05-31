@@ -2,6 +2,7 @@
 
 Status: non-blocking for Python historical market-data/backtest implementation
 Created: 2026-05-15
+Updated: 2026-05-31
 
 Simulation and historical market-data/backtest work can continue locally. These
 items block account-linked provider state, reconciliation persistence, or any
@@ -49,6 +50,10 @@ First historical-data implementation boundary:
 - Start offline-fixture-first, not with live eToro fetch code.
 - Use small public daily OHLCV fixtures under
   `tests/fixtures/market_history/` when committed.
+- Current committed public-test fixtures cover `SPY` and `GLD`; expand the
+  fixture universe only with small public, account-free OHLCV rows.
+- Current historical backtest output includes period diagnostics for `24h`,
+  `1w`, `1m`, `1y`, `5y`, and `max` as market context only.
 - Keep larger generated downloads under ignored
   `data/private/market-history/`.
 - Start with `SPY`/`GLD` style ETF or equity symbols that already fit the
