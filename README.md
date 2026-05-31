@@ -30,6 +30,12 @@ PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest \
   --started-at 2026-05-15T00:00:00Z
 ```
 
+Historical fixture backtests include a `periodDiagnostics` DTO for dashboard
+portfolio charting. It covers `24h`, `1w`, `1m`, `1y`, `5y`, and `max` with
+market-history change values, coverage state, source, and freshness-safe
+metadata. These are market context diagnostics only, not bot profitability,
+real P/L, win-rate, drawdown, Sharpe ratio, or execution-quality metrics.
+
 `--mode execute`, `--mode trade`, and `--mode trading` are rejected before any
 work runs.
 
@@ -74,6 +80,9 @@ PYTHONPATH=src python3.13 -m unittest discover tests
   outputs state they are not evaluated against real PnL.
 - Streaming CSV ingestion uses stdlib `csv` and date validation. Backtests flow
   as `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
+- Offline market-history diagnostics now emit selected-period context for
+  `24h`, `1w`, `1m`, `1y`, `5y`, and `max`, suitable for dashboard
+  instrument rows without provider calls or account data.
 - Backtest output is diagnostics only: coverage, veto counts, config errors,
   cadence/risk gate behavior, fixture source/date coverage, deterministic
   SHA-256 input metadata, parser version, Python version, and explicit

@@ -41,6 +41,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "historical-fixture-backtest")
         self.assertEqual(payload["providerCalls"], "blocked")
         self.assertEqual(payload["metadata"]["rowCount"], 3)
+        self.assertEqual(payload["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
+        self.assertEqual(payload["periodDiagnostics"]["periods"][0]["period"], "24h")
         self.assertEqual(payload["scenarioSummaries"][0]["allocation"]["providerDemoBalance"], "redacted")
 
     def test_cli_rejects_execute_and_trade_modes(self):

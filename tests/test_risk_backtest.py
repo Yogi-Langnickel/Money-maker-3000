@@ -19,6 +19,7 @@ from money_maker_3000.ledger import (
     redact_trade_log_entry,
 )
 from money_maker_3000.market_history import (
+    build_period_performance_diagnostics,
     iter_market_history_bars,
     parse_market_history_csv,
     sha256_file,
@@ -31,7 +32,9 @@ from money_maker_3000.reconciliation import (
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, evaluate_risk_gate, validate_risk_policy
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
+GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
 SELECTED_SPY = {"symbol": "SPY", "market": "US_EQUITIES", "instrumentClass": "ETF"}
+SELECTED_GLD = {"symbol": "GLD", "market": "US_EQUITIES", "instrumentClass": "ETF"}
 
 
 class RiskAndBacktestTests(unittest.TestCase):
@@ -169,6 +172,43 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(summary["closeMax"], 525.7)
         self.assertEqual(summary["providerCalls"], "blocked")
 
+    def test_period_performance_diagnostics_are_context_only(self):
+        with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            diagnostics = build_period_performance_diagnostics(
+                iter_market_history_bars(source, selected_symbol="SPY")
+            )
+        serialized = json.dumps(diagnostics)
+
+        self.assertEqual(diagnostics["dtoVersion"], "market-period-diagnostics.v1")
+        self.assertEqual(diagnostics["symbol"], "SPY")
+        self.assertEqual(diagnostics["latestDate"], "2026-05-13")
+        self.assertEqual(diagnostics["providerCalls"], "blocked")
+        self.assertEqual(diagnostics["accountData"], "absent")
+        self.assertEqual(diagnostics["execution"], "blocked")
+        self.assertEqual([period["period"] for period in diagnostics["periods"]], ["24h", "1w", "1m", "1y", "5y", "max"])
+        self.assertEqual(diagnostics["periods"][0]["startDate"], "2026-05-12")
+        self.assertEqual(diagnostics["periods"][0]["endDate"], "2026-05-13")
+        self.assertEqual(diagnostics["periods"][0]["barCount"], 2)
+        self.assertEqual(diagnostics["periods"][0]["changeAbsolute"], 1.4)
+        self.assertEqual(diagnostics["periods"][1]["coverageState"], "partial-history")
+        self.assertIn("market-history-change-only", diagnostics["performanceClaims"])
+        for forbidden in ("apikey", "accountid", "positionid", "orderid", "rawprovider", "winrate", "sharpe"):
+            self.assertNotIn(forbidden, serialized.lower())
+
+    def test_gld_fixture_expands_offline_instrument_coverage(self):
+        with GLD_FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            report = build_historical_fixture_backtest(
+                bars=iter_market_history_bars(source, selected_symbol="GLD"),
+                selected_instrument=SELECTED_GLD,
+                started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                input_sha256=sha256_file(GLD_FIXTURE_PATH),
+            )
+
+        self.assertEqual(report["metadata"]["dataSource"], "public-test-fixture")
+        self.assertEqual(report["metadata"]["rowCount"], 3)
+        self.assertEqual(report["periodDiagnostics"]["symbol"], "GLD")
+        self.assertEqual(report["periodDiagnostics"]["providerCalls"], "blocked")
+
     def test_market_history_parser_rejects_sensitive_columns_and_bad_rows(self):
         with self.assertRaisesRegex(ValueError, "account-linked columns"):
             parse_market_history_csv(
@@ -219,6 +259,9 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["lastDate"], "2026-05-13")
         self.assertEqual(report["metadata"]["rowCount"], 3)
         self.assertEqual(report["metadata"]["inputSha256"], input_sha)
+        self.assertEqual(report["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
+        self.assertEqual(report["periodDiagnostics"]["periods"][0]["period"], "24h")
+        self.assertEqual(report["periodDiagnostics"]["periods"][-1]["period"], "max")
         for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
         self.assertEqual(report["metadata"]["performanceClaims"], "diagnostics-only-no-return-or-execution-quality-metrics")

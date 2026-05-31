@@ -12,7 +12,12 @@ from money_maker_3000.contracts import (
     utc_iso,
 )
 from money_maker_3000.engine import CONFIG_VERSION, build_simulation_run
-from money_maker_3000.market_history import Bar, MarketHistoryAccumulator, PARSER_VERSION
+from money_maker_3000.market_history import (
+    Bar,
+    MarketHistoryAccumulator,
+    PARSER_VERSION,
+    build_period_performance_diagnostics,
+)
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, assess_data_freshness
 
 DEFAULT_SCENARIOS = (
@@ -230,11 +235,12 @@ def build_historical_fixture_backtest(
 ) -> dict[str, Any]:
     started = started_at or datetime.fromisoformat("2026-05-15T00:00:00+00:00")
     history = MarketHistoryAccumulator()
+    period_bars: list[Bar] = []
     event_summary = DecisionSummaryAccumulator()
     scenario_summaries: list[dict[str, Any]] = []
     runs: list[dict[str, Any]] = []
     for event in iter_decision_events(
-        _tee_history(bars, history),
+        _tee_history(bars, history, period_bars),
         strategy_id=strategy_id,
         selected_instrument=selected_instrument,
         budget_usd=budget_usd,
@@ -299,6 +305,7 @@ def build_historical_fixture_backtest(
             "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
         },
         "history": history_summary,
+        "periodDiagnostics": build_period_performance_diagnostics(period_bars),
         "summary": event_summary.to_dict(),
         "scenarioSummaries": scenario_summaries,
         "runs": runs,
@@ -306,7 +313,12 @@ def build_historical_fixture_backtest(
     }
 
 
-def _tee_history(bars: Iterable[Bar], accumulator: MarketHistoryAccumulator) -> Iterator[Bar]:
+def _tee_history(
+    bars: Iterable[Bar],
+    accumulator: MarketHistoryAccumulator,
+    period_bars: list[Bar],
+) -> Iterator[Bar]:
     for bar in bars:
         accumulator.update(bar)
+        period_bars.append(bar)
         yield bar
