@@ -124,6 +124,7 @@ def iter_decision_events(
             allocation_policy=allocation_policy or DEFAULT_ALLOCATION_POLICY,
             risk_state=RiskInputState(data_freshness=freshness),
             proposed_order_usd=None,
+            run_id_suffix=f"{bar.symbol}-{bar.date}-{index}",
         )
         yield DecisionEvent(eventId=f"decision-{bar.symbol}-{bar.date}-{index}", bar=bar.to_dict(), run=run)
 

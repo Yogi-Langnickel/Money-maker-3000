@@ -158,6 +158,43 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(risk_state.reconciliation_state, "missing")
         self.assertEqual(risk_state.data_freshness, "missing")
 
+    def test_reconciliation_freshness_is_derived_from_dates_when_present(self):
+        record = build_simulation_reconciliation_record(
+            provider_snapshot={
+                "providerState": "known-read-only",
+                "source": "synthetic",
+                "providerCallStatus": "not-attempted",
+            },
+            data_freshness="fresh",
+            data_last_seen_date="2026-05-01",
+            started_at_date="2026-05-15",
+            max_data_age_days=7,
+            daily_loss_usd=0.0,
+            weekly_loss_usd=0.0,
+            allocation_drawdown_usd=0.0,
+        )
+
+        self.assertFalse(record["validation"]["ok"])
+        self.assertEqual(record["riskInputState"]["data_freshness"], "stale")
+        self.assertIn("data freshness conflicts with provided dates", record["validation"]["problems"])
+
+    def test_reconciliation_rejects_unknown_freshness_states(self):
+        record = build_simulation_reconciliation_record(
+            provider_snapshot={
+                "providerState": "known-read-only",
+                "source": "synthetic",
+                "providerCallStatus": "not-attempted",
+            },
+            data_freshness="fresh-enough",
+            daily_loss_usd=0.0,
+            weekly_loss_usd=0.0,
+            allocation_drawdown_usd=0.0,
+        )
+
+        self.assertFalse(record["validation"]["ok"])
+        self.assertEqual(record["riskInputState"]["data_freshness"], "unknown")
+        self.assertIn("data freshness state is invalid", record["validation"]["problems"])
+
     def test_streaming_market_history_parser_and_single_pass_summary(self):
         with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
             bars = iter_market_history_bars(source, selected_symbol="SPY")
@@ -237,6 +274,20 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(summary["vetoHistogram"]["missing-reconciliation"], 3)
         self.assertEqual(summary["vetoHistogram"]["execution-route-absent"], 3)
         self.assertIn("diagnostics-only", summary["performanceClaims"])
+
+    def test_historical_fixture_backtest_run_ids_are_unique_per_bar(self):
+        with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            report = build_historical_fixture_backtest(
+                bars=iter_market_history_bars(source, selected_symbol="SPY"),
+                selected_instrument=SELECTED_SPY,
+                started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                input_sha256=sha256_file(FIXTURE_PATH),
+            )
+
+        run_ids = [run["runId"] for run in report["runs"]]
+        self.assertEqual(len(run_ids), 3)
+        self.assertEqual(len(set(run_ids)), 3)
+        self.assertTrue(all("SPY" in run_id for run_id in run_ids))
 
     def test_historical_fixture_backtest_metadata_is_deterministic_and_diagnostics_only(self):
         input_sha = sha256_file(FIXTURE_PATH)

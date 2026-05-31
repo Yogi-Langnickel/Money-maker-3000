@@ -41,13 +41,15 @@ Updated: 2026-05-31
 - Backtests flow as `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary` and
   emit diagnostics only: coverage, veto counts, config errors, cadence/risk
   gate behavior, fixture source/date coverage, input SHA-256, parser version,
-  Python version, and explicit started time.
+  Python version, explicit started time, and event-unique historical run IDs.
 - `ledger.py` writes/reads redacted local JSONL audit records with correlation
   IDs, strategy version, config hash, allocation IDs, risk decision, vetoes,
   data freshness, and provider call status.
 - `reconciliation.py` builds simulation-only reconciliation records from
   caller-supplied synthetic/read-only inputs, redacts provider/account balance
-  fields, and converts available records into `RiskInputState`.
+  fields, derives freshness from supplied dates when present, rejects
+  contradictory caller-supplied freshness, and converts available records into
+  `RiskInputState`.
 - Provider readiness metadata is metadata-only and explicitly blocks provider
   calls, credentials, account data, order previews, demo execution, and live
   execution.
