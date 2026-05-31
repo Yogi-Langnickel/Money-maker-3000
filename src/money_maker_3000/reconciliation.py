@@ -10,6 +10,7 @@ from money_maker_3000.risk import RiskInputState, assess_data_freshness
 RECONCILIATION_VERSION = "0.1.0-sim"
 SAFE_RECONCILIATION_SOURCES = ("synthetic", "offline-fixture")
 SAFE_PROVIDER_CALL_STATUSES = ("blocked", "not-attempted", "read-only-fixture")
+SAFE_FRESHNESS_STATES = ("fresh", "stale", "missing", "unknown", "future-data")
 
 
 def _non_negative_number(value: Any) -> bool:
@@ -26,15 +27,22 @@ def _freshness_from_inputs(
     data_last_seen_date: str | None,
     started_at_date: str | None,
     max_age_days: int,
+    problems: list[str],
 ) -> str:
-    if data_freshness:
-        return data_freshness
     if data_last_seen_date and started_at_date:
-        return assess_data_freshness(
+        derived = assess_data_freshness(
             last_date=data_last_seen_date,
             started_at_date=started_at_date,
             max_age_days=max_age_days,
         )
+        if data_freshness and data_freshness != derived:
+            problems.append("data freshness conflicts with provided dates")
+        return derived
+    if data_freshness:
+        if data_freshness not in SAFE_FRESHNESS_STATES:
+            problems.append("data freshness state is invalid")
+            return "unknown"
+        return data_freshness
     return "unknown"
 
 
@@ -79,6 +87,7 @@ def build_simulation_reconciliation_record(
         data_last_seen_date=data_last_seen_date,
         started_at_date=started_at_date,
         max_age_days=max_data_age_days,
+        problems=problems,
     )
 
     for label, value in (

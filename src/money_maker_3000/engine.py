@@ -72,6 +72,7 @@ def build_simulation_run(
     schedule_policy: dict[str, Any] | None = None,
     risk_state: RiskInputState | None = None,
     proposed_order_usd: float | None = None,
+    run_id_suffix: str | None = None,
 ) -> dict[str, Any]:
     evaluated_at = utc_iso(now or datetime.fromisoformat("2026-05-14T00:00:00+00:00"))
     effective_budget_policy = budget_policy or DEFAULT_BUDGET_POLICY
@@ -93,9 +94,18 @@ def build_simulation_run(
         proposed_order_usd=proposed_order_usd,
     )
 
+    run_id = f"sim-{evaluated_at}"
+    if run_id_suffix:
+        normalized_suffix = "".join(
+            character if character.isalnum() or character in {"-", "_"} else "-"
+            for character in run_id_suffix
+        ).strip("-")
+        if normalized_suffix:
+            run_id = f"{run_id}-{normalized_suffix}"
+
     return {
         "dtoVersion": "simulation-run.v1",
-        "runId": f"sim-{evaluated_at}",
+        "runId": run_id,
         "correlationId": f"corr-{config_hash[:16]}",
         "strategyId": strategy["strategyId"] if strategy else effective_config["strategyId"],
         "strategyVersion": strategy["version"] if strategy else "unknown",
