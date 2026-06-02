@@ -10,8 +10,9 @@ Updated: 2026-05-31
   `src/money_maker_3000/`; the previous Node runtime scaffold is retired.
 - The worker does not call eToro, load credentials, preview orders, place demo
   orders, place live orders, or expose execution routes.
-- CLI entrypoints are `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest`
-  and `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report ...`.
+- CLI entrypoints are `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest`,
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch`, and
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report ...`.
 - Strategy selection comes only from the predefined registry in
   `strategies.py`; arbitrary operator-provided strategy code is not allowed.
 - `contracts.py` owns the simulation config/run-mode/allocation contract.
@@ -38,6 +39,10 @@ Updated: 2026-05-31
   change diagnostics for dashboard portfolio charting. The DTO explicitly
   blocks provider calls, account data, and execution, and carries
   market-history-only performance claims.
+- Offline fixture batch diagnostics can run multiple fixture files from a JSON
+  manifest or repeated `SYMBOL=PATH` CLI entries, aggregate coverage/veto
+  summaries, and emit per-symbol SHA-256/parser metadata/period diagnostics
+  with provider calls blocked.
 - Backtests flow as `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary` and
   emit diagnostics only: coverage, veto counts, config errors, cadence/risk
   gate behavior, fixture source/date coverage, input SHA-256, parser version,
@@ -64,6 +69,9 @@ Updated: 2026-05-31
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest --history-csv tests/fixtures/market_history/spy-daily.csv --started-at 2026-05-15T00:00:00Z`:
   run the offline fixture diagnostics DTO, including selected-period market
   change diagnostics.
+- `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch --fixture SPY=tests/fixtures/market_history/spy-daily.csv --fixture GLD=tests/fixtures/market_history/gld-daily.csv --started-at 2026-05-15T00:00:00Z`:
+  run batch offline fixture diagnostics with per-symbol metadata and period
+  diagnostics.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report .local/simulation-ledger.jsonl`:
   export a redacted dashboard DTO from an existing local synthetic ledger.
 

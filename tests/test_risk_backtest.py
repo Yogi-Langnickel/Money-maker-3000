@@ -6,6 +6,7 @@ from pathlib import Path
 
 from money_maker_3000.backtest import (
     build_historical_fixture_backtest,
+    build_offline_fixture_batch_diagnostics,
     build_synthetic_backtest,
     iter_decision_events,
     summarize_decision_events,
@@ -245,6 +246,58 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["rowCount"], 3)
         self.assertEqual(report["periodDiagnostics"]["symbol"], "GLD")
         self.assertEqual(report["periodDiagnostics"]["providerCalls"], "blocked")
+
+    def test_offline_fixture_batch_diagnostics_aggregate_per_symbol_reports(self):
+        reports = []
+        for symbol, fixture_path, selected in (
+            ("SPY", FIXTURE_PATH, SELECTED_SPY),
+            ("GLD", GLD_FIXTURE_PATH, SELECTED_GLD),
+        ):
+            with fixture_path.open("r", encoding="utf-8", newline="") as source:
+                reports.append(
+                    build_historical_fixture_backtest(
+                        bars=iter_market_history_bars(source, selected_symbol=symbol),
+                        selected_instrument=selected,
+                        started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                        input_sha256=sha256_file(fixture_path),
+                    )
+                )
+
+        batch = build_offline_fixture_batch_diagnostics(
+            reports=reports,
+            started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+        )
+        serialized = json.dumps(batch)
+
+        self.assertEqual(batch["dtoVersion"], "offline-fixture-batch-diagnostics.v1")
+        self.assertEqual(batch["mode"], "offline-fixture-batch-diagnostics")
+        self.assertEqual(batch["providerCalls"], "blocked")
+        self.assertEqual(batch["executionRoutes"], "absent")
+        self.assertEqual(batch["coverage"]["fixtureCount"], 2)
+        self.assertEqual(batch["coverage"]["totalRows"], 6)
+        self.assertEqual(batch["summary"]["eventCount"], 6)
+        self.assertEqual(batch["summary"]["blockedCount"], 6)
+        self.assertEqual(batch["metadata"]["symbols"], ["GLD", "SPY"])
+        self.assertEqual([item["symbol"] for item in batch["perSymbolDiagnostics"]], ["SPY", "GLD"])
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["inputSha256"], sha256_file(FIXTURE_PATH))
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["parserVersion"], "0.1.0-streaming-stdlib")
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["coverage"]["rowCount"], 3)
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
+        self.assertIn("missing-reconciliation", batch["summary"]["vetoHistogram"])
+        for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_offline_fixture_batch_rejects_duplicate_symbols(self):
+        with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            report = build_historical_fixture_backtest(
+                bars=iter_market_history_bars(source, selected_symbol="SPY"),
+                selected_instrument=SELECTED_SPY,
+                started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                input_sha256=sha256_file(FIXTURE_PATH),
+            )
+
+        with self.assertRaisesRegex(ValueError, "duplicate offline fixture symbol"):
+            build_offline_fixture_batch_diagnostics(reports=[report, report])
 
     def test_market_history_parser_rejects_sensitive_columns_and_bad_rows(self):
         with self.assertRaisesRegex(ValueError, "account-linked columns"):

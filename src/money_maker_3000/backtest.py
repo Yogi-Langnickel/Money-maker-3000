@@ -314,6 +314,97 @@ def build_historical_fixture_backtest(
     }
 
 
+def build_offline_fixture_batch_diagnostics(
+    *,
+    reports: Iterable[dict[str, Any]],
+    started_at: datetime | None = None,
+) -> dict[str, Any]:
+    started = started_at or datetime.fromisoformat("2026-05-15T00:00:00+00:00")
+    per_symbol = []
+    symbols: set[str] = set()
+    total_rows = 0
+    total_events = 0
+    blocked_events = 0
+    veto_histogram: dict[str, int] = {}
+
+    for report in reports:
+        if report.get("providerCalls") != "blocked":
+            raise ValueError("offline fixture batch reports must block provider calls")
+        if report.get("executionRoutes") != "absent":
+            raise ValueError("offline fixture batch reports must not include execution routes")
+        metadata = report["metadata"]
+        history = report["history"]
+        symbol = str(history["symbol"])
+        if symbol in symbols:
+            raise ValueError(f"duplicate offline fixture symbol: {symbol}")
+        symbols.add(symbol)
+
+        row_count = int(metadata["rowCount"])
+        event_count = int(report["summary"]["eventCount"])
+        blocked_count = int(report["summary"]["blockedCount"])
+        total_rows += row_count
+        total_events += event_count
+        blocked_events += blocked_count
+        _merge_histogram(veto_histogram, report["summary"]["vetoHistogram"])
+        per_symbol.append(
+            {
+                "symbol": symbol,
+                "mode": report["mode"],
+                "environment": report["environment"],
+                "providerCalls": "blocked",
+                "executionRoutes": "absent",
+                "accountData": "absent",
+                "inputSha256": metadata["inputSha256"],
+                "parserVersion": metadata["parserVersion"],
+                "coverage": {
+                    "source": metadata["dataSource"],
+                    "rowCount": row_count,
+                    "firstDate": metadata["firstDate"],
+                    "lastDate": metadata["lastDate"],
+                },
+                "periodDiagnostics": report["periodDiagnostics"],
+                "summary": report["summary"],
+                "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
+            }
+        )
+
+    if not per_symbol:
+        raise ValueError("offline fixture batch requires at least one fixture report")
+
+    return {
+        "dtoVersion": "offline-fixture-batch-diagnostics.v1",
+        "mode": "offline-fixture-batch-diagnostics",
+        "environment": "offline-fixture",
+        "providerCalls": "blocked",
+        "executionRoutes": "absent",
+        "accountData": "absent",
+        "startedAt": utc_iso(started),
+        "metadata": {
+            "configVersion": CONFIG_VERSION,
+            "parserVersion": PARSER_VERSION,
+            "pythonVersion": platform.python_version(),
+            "fixtureCount": len(per_symbol),
+            "symbols": sorted(symbols),
+            "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
+        },
+        "coverage": {
+            "fixtureCount": len(per_symbol),
+            "totalRows": total_rows,
+            "totalEvents": total_events,
+            "blockedEvents": blocked_events,
+            "providerCalls": "blocked",
+            "execution": "blocked",
+        },
+        "perSymbolDiagnostics": per_symbol,
+        "summary": {
+            "eventCount": total_events,
+            "blockedCount": blocked_events,
+            "vetoHistogram": veto_histogram,
+            "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
+        },
+    }
+
+
 def _tee_history(
     bars: Iterable[Bar],
     accumulator: MarketHistoryAccumulator,
@@ -323,3 +414,8 @@ def _tee_history(
         accumulator.update(bar)
         period_bars.append(bar)
         yield bar
+
+
+def _merge_histogram(target: dict[str, int], source: dict[str, int]) -> None:
+    for key, value in source.items():
+        target[key] = target.get(key, 0) + int(value)
