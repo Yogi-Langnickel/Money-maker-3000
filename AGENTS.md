@@ -5,6 +5,11 @@ Treat all work as financial and security-sensitive.
 
 ## Rules
 
+- Work on scoped branches. Completed deliverables target `develop`; `master` is
+  release/promotion only and needs explicit user approval.
+- Before substantial or high-risk work is merged into `develop`, run two
+  persona review iterations with relevant reviewers, address required feedback,
+  and classify any remaining feedback with rationale.
 - Do not add live trading, live eToro API calls, account mutation, credential
   loading, order previews, execution routes, or provider mutation endpoints.
 - Keep all behavior simulation-first. Demo execution remains disabled until a
