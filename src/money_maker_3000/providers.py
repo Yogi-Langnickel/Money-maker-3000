@@ -20,6 +20,14 @@ PROVIDER_REGISTRY = [
         "demoExecution": "blocked",
         "liveExecution": "blocked",
         "supportedModes": ["simulation"],
+        "safetyPosture": {
+            "credentialLoading": "blocked",
+            "privateAccountData": "absent",
+            "rawPayloadPersistence": "blocked",
+            "portfolioBalanceUse": "blocked-for-sizing",
+            "orderMutation": "blocked",
+            "networkAccess": "absent",
+        },
         "capabilities": {
             "portfolioRead": "absent",
             "marketDataRead": "absent",
@@ -78,6 +86,22 @@ def validate_provider_metadata(provider: dict[str, Any]) -> ValidationResult:
     if provider.get("supportedModes") != ["simulation"]:
         errors.append("provider supported modes must contain simulation only")
 
+    safety_posture = provider.get("safetyPosture")
+    if not isinstance(safety_posture, dict):
+        errors.append("provider safety posture is required")
+    else:
+        expected_safety = {
+            "credentialLoading": "blocked",
+            "privateAccountData": "absent",
+            "rawPayloadPersistence": "blocked",
+            "portfolioBalanceUse": "blocked-for-sizing",
+            "orderMutation": "blocked",
+            "networkAccess": "absent",
+        }
+        for key, expected in expected_safety.items():
+            if safety_posture.get(key) != expected:
+                errors.append(f"provider safety posture must keep {key}={expected}")
+
     capabilities = provider.get("capabilities")
     if not isinstance(capabilities, dict):
         errors.append("provider capabilities are required")
@@ -113,6 +137,7 @@ def build_provider_metadata_snapshot(providers: list[dict[str, Any]] | None = No
                 "demoExecution": source.get("demoExecution", "invalid"),
                 "liveExecution": source.get("liveExecution", "invalid"),
                 "supportedModes": list(source.get("supportedModes", [])),
+                "safetyPosture": deepcopy(source.get("safetyPosture", {})),
                 "capabilities": deepcopy(source.get("capabilities", {})),
             }
         )
@@ -122,6 +147,14 @@ def build_provider_metadata_snapshot(providers: list[dict[str, Any]] | None = No
         "credentials": "not-loaded",
         "accountData": "absent",
         "executionRoutes": "absent",
+        "safetyPosture": {
+            "credentialLoading": "blocked",
+            "privateAccountData": "absent",
+            "rawPayloadPersistence": "blocked",
+            "portfolioBalanceUse": "blocked-for-sizing",
+            "orderMutation": "blocked",
+            "networkAccess": "absent",
+        },
         "providers": safe_providers,
         "validation": {
             "ok": all(validation["ok"] for validation in validations),

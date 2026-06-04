@@ -105,6 +105,13 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(snapshot["providerCalls"], "blocked")
         self.assertEqual(snapshot["executionRoutes"], "absent")
         self.assertEqual(snapshot["credentials"], "not-loaded")
+        self.assertEqual(snapshot["safetyPosture"]["credentialLoading"], "blocked")
+        self.assertEqual(snapshot["safetyPosture"]["privateAccountData"], "absent")
+        self.assertEqual(snapshot["safetyPosture"]["rawPayloadPersistence"], "blocked")
+        self.assertEqual(snapshot["safetyPosture"]["portfolioBalanceUse"], "blocked-for-sizing")
+        self.assertEqual(snapshot["safetyPosture"]["orderMutation"], "blocked")
+        self.assertEqual(snapshot["safetyPosture"]["networkAccess"], "absent")
+        self.assertEqual(snapshot["providers"][0]["safetyPosture"], snapshot["safetyPosture"])
         self.assertTrue(snapshot["validation"]["ok"])
 
         gateway = DisabledExecutionGateway()
