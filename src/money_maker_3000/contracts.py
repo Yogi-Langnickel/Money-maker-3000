@@ -13,7 +13,7 @@ SIMULATION_MARKETS = ("US_EQUITIES", "AU_EQUITIES", "FOREX", "COMMODITIES")
 SIMULATION_INSTRUMENT_CLASSES = ("EQUITY", "ETF", "FOREX", "COMMODITY")
 BLOCKED_SIMULATION_INSTRUMENT_CLASSES = ("CFD", "CRYPTO", "DERIVATIVE", "OPTION")
 SIMULATION_ALLOWED_RUN_MODES = ("backtest",)
-SIMULATION_DISABLED_RUN_MODES = ("execute",)
+SIMULATION_DISABLED_RUN_MODES = ("execute", "trade", "trading")
 SIMULATION_RUN_MODES = SIMULATION_ALLOWED_RUN_MODES + SIMULATION_DISABLED_RUN_MODES
 SIMULATION_CADENCES = ("daily", "weekly")
 MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES = 240
@@ -33,6 +33,20 @@ SIMULATION_RUN_MODE_POLICY = {
         "demoExecution": "blocked",
         "liveExecution": "blocked",
         "reason": "demo execution requires a separate review and explicit approval",
+    },
+    "trade": {
+        "enabled": False,
+        "providerCalls": "blocked",
+        "demoExecution": "blocked",
+        "liveExecution": "blocked",
+        "reason": "trading aliases are disabled; only offline backtest mode is allowed",
+    },
+    "trading": {
+        "enabled": False,
+        "providerCalls": "blocked",
+        "demoExecution": "blocked",
+        "liveExecution": "blocked",
+        "reason": "trading aliases are disabled; only offline backtest mode is allowed",
     },
 }
 

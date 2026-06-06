@@ -14,9 +14,45 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
     fcntl = None
 
 from money_maker_3000.contracts import utc_iso
+from money_maker_3000.strategies import STRATEGY_REGISTRY
 
 REDACTED = "redacted"
 ABSENT = "absent"
+REPORT_DECISIONS = {"skip"}
+REPORT_RISK_RESULTS = {"blocked"}
+REPORT_RISK_DECISIONS = {"blocked"}
+REPORT_TRADE_LOG_ACTIONS = {"simulated-skip"}
+REPORT_STRATEGY_IDS = {strategy["strategyId"] for strategy in STRATEGY_REGISTRY}
+REPORT_DATA_FRESHNESS = {"fresh", "future-data", "missing", "stale", "unknown"}
+REPORT_VETO_CODES = {
+    "allocation-drawdown-stop",
+    "blocked-instrument-class",
+    "cash-reserve-floor",
+    "daily-loss-stop",
+    "data-future-data",
+    "data-missing",
+    "data-stale",
+    "data-unknown",
+    "execution-route-absent",
+    "insufficient-available-allocation",
+    "invalid-allocation-policy",
+    "invalid-budget-policy",
+    "invalid-risk-policy",
+    "invalid-schedule-policy",
+    "invalid-simulation-config",
+    "invalid-strategy-registry",
+    "invalid-strategy-version",
+    "max-open-positions",
+    "missing-loss-reconciliation",
+    "missing-order-intent",
+    "missing-reconciliation",
+    "per-instrument-exposure-cap",
+    "per-order-cap",
+    "provider-not-connected",
+    "unknown-provider-state",
+    "weekly-loss-stop",
+}
+REPORT_REASON_CODES = REPORT_RISK_DECISIONS | REPORT_VETO_CODES
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(account|api[-_]?key|auth|balance|credential|email|holding|jwt|name|oauth|order|portfolio|position|secret|statement|token|transaction|user[-_]?key)",
     re.I,
@@ -222,36 +258,96 @@ def _exclusive_ledger_writer(path: Path) -> Iterator[None]:
 
 def _increment(histogram: dict[str, int], values: Iterable[str]) -> None:
     for value in values:
-        histogram[value] = histogram.get(value, 0) + 1
+        if isinstance(value, str) and value:
+            histogram[value] = histogram.get(value, 0) + 1
+
+
+def _report_scalar(value: Any, default: Any = None) -> Any:
+    redacted = _redact_value(value)
+    if isinstance(redacted, (dict, list)):
+        return default
+    return redacted if redacted is not None else default
+
+
+def _report_list(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value:
+        redacted = _redact_value(item)
+        if not isinstance(redacted, (dict, list)):
+            result.append(redacted)
+    return result
+
+
+def _allowed_report_scalar(value: Any, allowed: set[str], default: str | None = None) -> str | None:
+    scalar = _report_scalar(value)
+    if isinstance(scalar, str) and scalar in allowed:
+        return scalar
+    return default
+
+
+def _allowed_report_list(value: Any, allowed: set[str]) -> list[str]:
+    return [item for item in _report_list(value) if isinstance(item, str) and item in allowed]
+
+
+def _report_number(value: Any) -> int | float | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _sanitize_report_record(record: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        raise TypeError("ledger report records must be JSON objects")
+    redacted = redact_mapping(record)
+    trade_log = redact_trade_log_entry(redacted.get("tradeLogEntry"))
+    return {
+        "ledgerVersion": _report_scalar(redacted.get("ledgerVersion"), 2),
+        "recordedAt": _report_scalar(redacted.get("recordedAt")),
+        "correlationId": _report_scalar(redacted.get("correlationId")),
+        "runId": _report_scalar(redacted.get("runId")),
+        "strategyId": _allowed_report_scalar(redacted.get("strategyId"), REPORT_STRATEGY_IDS),
+        "strategyVersion": _report_scalar(redacted.get("strategyVersion")),
+        "configVersion": _report_scalar(redacted.get("configVersion")),
+        "configHash": _report_scalar(redacted.get("configHash")),
+        "allocationId": _report_scalar(redacted.get("allocationId")),
+        "strategyAllocationId": _report_scalar(redacted.get("strategyAllocationId")),
+        "decision": _allowed_report_scalar(redacted.get("decision"), REPORT_DECISIONS, "skip"),
+        "riskResult": _allowed_report_scalar(redacted.get("riskResult"), REPORT_RISK_RESULTS, "blocked"),
+        "riskDecision": _allowed_report_scalar(redacted.get("riskDecision"), REPORT_RISK_DECISIONS, "blocked"),
+        "vetoes": _allowed_report_list(redacted.get("vetoes"), REPORT_VETO_CODES),
+        "dataFreshness": _allowed_report_scalar(redacted.get("dataFreshness"), REPORT_DATA_FRESHNESS, "unknown"),
+        "tradeLogEntry": trade_log,
+    }
 
 
 def _record_dto(record: dict[str, Any]) -> dict[str, Any]:
-    trade_log = redact_trade_log_entry(record.get("tradeLogEntry"))
+    sanitized = _sanitize_report_record(record)
+    trade_log = sanitized["tradeLogEntry"]
     return {
-        "ledgerVersion": record.get("ledgerVersion", 2),
-        "recordedAt": record.get("recordedAt"),
-        "correlationId": record.get("correlationId"),
-        "runId": record.get("runId"),
+        "ledgerVersion": sanitized["ledgerVersion"],
+        "recordedAt": sanitized["recordedAt"],
+        "correlationId": sanitized["correlationId"],
+        "runId": sanitized["runId"],
         "mode": "simulation",
         "environment": "synthetic",
-        "strategyId": record.get("strategyId"),
-        "strategyVersion": record.get("strategyVersion"),
-        "configVersion": record.get("configVersion"),
-        "configHash": record.get("configHash"),
-        "allocationId": record.get("allocationId"),
-        "strategyAllocationId": record.get("strategyAllocationId"),
-        "decision": record.get("decision"),
-        "riskResult": record.get("riskResult"),
-        "riskDecision": record.get("riskDecision", "blocked"),
-        "vetoes": list(record.get("vetoes", [])),
-        "dataFreshness": record.get("dataFreshness", "unknown"),
+        "strategyId": sanitized["strategyId"],
+        "strategyVersion": sanitized["strategyVersion"],
+        "configVersion": sanitized["configVersion"],
+        "configHash": sanitized["configHash"],
+        "allocationId": sanitized["allocationId"],
+        "strategyAllocationId": sanitized["strategyAllocationId"],
+        "decision": sanitized["decision"],
+        "riskResult": sanitized["riskResult"],
+        "riskDecision": sanitized["riskDecision"],
+        "vetoes": sanitized["vetoes"],
+        "dataFreshness": sanitized["dataFreshness"],
         "providerCallStatus": "not-attempted",
         "executionRoute": ABSENT,
         "tradeLog": {
-            "action": trade_log.get("action"),
-            "reasonCode": trade_log.get("reasonCode"),
-            "budgetRemainingUsd": trade_log.get("budgetRemainingUsd"),
-            "riskDecision": trade_log.get("riskDecision", "blocked"),
+            "action": _allowed_report_scalar(trade_log.get("action"), REPORT_TRADE_LOG_ACTIONS, "simulated-skip"),
+            "reasonCode": _allowed_report_scalar(trade_log.get("reasonCode"), REPORT_REASON_CODES, "blocked"),
+            "budgetRemainingUsd": _report_number(trade_log.get("budgetRemainingUsd")),
+            "riskDecision": _allowed_report_scalar(trade_log.get("riskDecision"), REPORT_RISK_DECISIONS, "blocked"),
             "providerCall": trade_log.get("providerCall"),
             "executionRoute": trade_log.get("executionRoute"),
             "accountIdentifiers": trade_log.get("accountIdentifiers"),
@@ -277,7 +373,7 @@ def build_ledger_report(
         _increment(veto_histogram, record.get("vetoes", []))
         if record.get("strategyId"):
             strategy_ids.add(record["strategyId"])
-        if record.get("recordedAt"):
+        if isinstance(record.get("recordedAt"), str) and record.get("recordedAt"):
             recorded_values.append(record["recordedAt"])
     recorded_values.sort()
     return {

@@ -18,6 +18,7 @@ from money_maker_3000.ledger import (
     append_ledger_record,
     build_ledger_record,
     build_ledger_report,
+    export_ledger_report,
     read_ledger_records,
     redact_trade_log_entry,
 )
@@ -507,6 +508,114 @@ class RiskAndBacktestTests(unittest.TestCase):
                         "tradeLogEntry": {"memo": "operator@example.test"},
                     },
                 )
+
+    def test_ledger_report_redacts_manually_edited_legacy_records(self):
+        legacy_record = {
+            "ledgerVersion": 1,
+            "recordedAt": "2026-05-15T00:00:00.000Z",
+            "correlationId": "corr-manual-1",
+            "runId": "run-manual-1",
+            "mode": "live",
+            "environment": "provider",
+            "strategyId": "dca-cash-reserve",
+            "strategyVersion": "0.1.0-sim",
+            "configVersion": "cfg",
+            "configHash": "hash",
+            "allocationId": "alloc-sim-default",
+            "strategyAllocationId": "alloc-sim-dca",
+            "decision": "skip",
+            "riskResult": "blocked",
+            "riskDecision": "blocked",
+            "vetoes": ["execution-route-absent", "manual note for acct-real-123"],
+            "dataFreshness": "fresh",
+            "providerCallStatus": "attempted",
+            "executionRoute": "demo",
+            "tradeLogEntry": {
+                "action": "simulated-skip",
+                "reasonCode": "provider-not-connected",
+                "accountId": "acct-real-123",
+                "apiKey": "api-secret-abcdef12",
+                "note": "operator@example.test",
+                "providerCall": "attempted",
+                "executionRoute": "demo",
+            },
+            "rawProviderPayload": {"token": "token-secret-abcdef12"},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "legacy-ledger.jsonl"
+            ledger_path.write_text(json.dumps(legacy_record) + "\n", encoding="utf-8")
+            ledger_report = export_ledger_report(ledger_path)
+        serialized = json.dumps(ledger_report, sort_keys=True)
+
+        self.assertEqual(ledger_report["environment"], "synthetic")
+        self.assertEqual(ledger_report["providerCalls"], "blocked")
+        self.assertEqual(ledger_report["executionRoutes"], "absent")
+        self.assertEqual(ledger_report["records"][0]["mode"], "simulation")
+        self.assertEqual(ledger_report["records"][0]["environment"], "synthetic")
+        self.assertEqual(ledger_report["records"][0]["providerCallStatus"], "not-attempted")
+        self.assertEqual(ledger_report["records"][0]["executionRoute"], "absent")
+        self.assertEqual(ledger_report["records"][0]["tradeLog"]["accountIdentifiers"], "redacted")
+        self.assertEqual(ledger_report["records"][0]["tradeLog"]["rawProviderPayloads"], "absent")
+        self.assertEqual(ledger_report["records"][0]["tradeLog"]["providerCall"], "not-attempted")
+        self.assertEqual(ledger_report["records"][0]["tradeLog"]["executionRoute"], "absent")
+        self.assertNotIn("acct-real-123", serialized)
+        self.assertNotIn("operator@example.test", serialized)
+        self.assertNotIn("api-secret-abcdef12", serialized)
+        self.assertNotIn("token-secret-abcdef12", serialized)
+
+    def test_ledger_report_normalizes_unsafe_legacy_state_fields(self):
+        report = build_ledger_report(
+            records=[
+                {
+                    "ledgerVersion": 1,
+                    "recordedAt": "2026-05-15T00:00:00.000Z",
+                    "correlationId": "corr-manual-unsafe-state",
+                    "runId": "run-manual-unsafe-state",
+                    "strategyId": "operator-alpha",
+                    "strategyVersion": "0.1.0-sim",
+                    "configVersion": "cfg",
+                    "configHash": "hash",
+                    "allocationId": "alloc-sim-default",
+                    "strategyAllocationId": "alloc-sim-dca",
+                    "decision": "buy",
+                    "riskResult": "approved",
+                    "riskDecision": "allowed",
+                    "vetoes": ["execution-route-absent", "guaranteed-profit", "win-rate-100"],
+                    "dataFreshness": "guaranteed-profit",
+                    "tradeLogEntry": {
+                        "action": "buy",
+                        "reasonCode": "guaranteed-profit",
+                        "budgetRemainingUsd": "win-rate-100",
+                        "riskDecision": "allowed",
+                        "providerCall": "attempted",
+                        "executionRoute": "demo",
+                    },
+                }
+            ]
+        )
+        serialized = json.dumps(report, sort_keys=True)
+        record = report["records"][0]
+        summary = report["summary"]
+
+        self.assertEqual(record["decision"], "skip")
+        self.assertEqual(record["riskResult"], "blocked")
+        self.assertEqual(record["riskDecision"], "blocked")
+        self.assertEqual(record["vetoes"], ["execution-route-absent"])
+        self.assertEqual(record["dataFreshness"], "unknown")
+        self.assertEqual(record["strategyId"], None)
+        self.assertEqual(record["tradeLog"]["action"], "simulated-skip")
+        self.assertEqual(record["tradeLog"]["reasonCode"], "blocked")
+        self.assertEqual(record["tradeLog"]["budgetRemainingUsd"], None)
+        self.assertEqual(record["tradeLog"]["riskDecision"], "blocked")
+        self.assertEqual(summary["skipCount"], 1)
+        self.assertEqual(summary["blockedCount"], 1)
+        self.assertEqual(summary["strategyIds"], [])
+        self.assertEqual(summary["decisionHistogram"], {"skip": 1})
+        self.assertEqual(summary["riskResultHistogram"], {"blocked": 1})
+        self.assertEqual(summary["vetoHistogram"], {"execution-route-absent": 1})
+        for unsafe in ("buy", "approved", "allowed", "guaranteed-profit", "win-rate-100", "operator-alpha"):
+            self.assertNotIn(unsafe, serialized)
 
     def test_ledger_append_is_single_writer_across_processes(self):
         if "fork" not in multiprocessing.get_all_start_methods():

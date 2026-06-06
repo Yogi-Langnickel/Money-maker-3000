@@ -116,7 +116,7 @@ def validate_strategy_registry(registry: list[dict[str, Any]] | None = None) -> 
         )
         if not isinstance(parameter_schema, dict) or not parameter_schema:
             errors.append(f"{label} must expose an allowlisted parameter schema")
-        elif expected_parameter_schema is not None and set(parameter_schema) != set(expected_parameter_schema):
+        elif expected_parameter_schema is not None and parameter_schema != expected_parameter_schema:
             errors.append(f"{label} parameter schema must match the predefined contract")
 
         allowed_markets = strategy.get("allowedMarkets")

@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from money_maker_3000.contracts import (
@@ -62,6 +63,20 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("parameter schema must match the predefined contract", " ".join(result.errors))
 
+    def test_strategy_registry_rejects_schema_value_mutations(self):
+        unsafe_schema = {
+            **STRATEGY_REGISTRY[0]["parameterSchema"],
+            "fixedOrderUsd": {
+                **STRATEGY_REGISTRY[0]["parameterSchema"]["fixedOrderUsd"],
+                "maximum": 10_000.0,
+            },
+        }
+        unsafe_strategy = {**STRATEGY_REGISTRY[0], "parameterSchema": unsafe_schema}
+        result = validate_strategy_registry([unsafe_strategy])
+
+        self.assertFalse(result.ok)
+        self.assertIn("parameter schema must match the predefined contract", " ".join(result.errors))
+
     def test_strategy_parameter_schema_rejects_unknown_and_unsafe_values(self):
         result = validate_strategy_parameters(
             "slow-trend-allocation",
@@ -114,9 +129,14 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(SIMULATION_CONFIG_CONTRACT["source"], "Money-maker-3000/src/money_maker_3000/contracts.py")
         self.assertEqual(SIMULATION_CONFIG_CONTRACT["runModes"], ["backtest"])
         self.assertEqual(SIMULATION_CONFIG_CONTRACT["allowedRunModes"], ["backtest"])
-        self.assertIn("execute", SIMULATION_CONFIG_CONTRACT["disabledRunModes"])
+        self.assertEqual(
+            sorted(SIMULATION_CONFIG_CONTRACT["disabledRunModes"]),
+            ["execute", "trade", "trading"],
+        )
         self.assertTrue(SIMULATION_CONFIG_CONTRACT["runModePolicy"]["backtest"]["enabled"])
-        self.assertFalse(SIMULATION_CONFIG_CONTRACT["runModePolicy"]["execute"]["enabled"])
+        for mode in ("execute", "trade", "trading"):
+            self.assertFalse(SIMULATION_CONFIG_CONTRACT["runModePolicy"][mode]["enabled"])
+            self.assertEqual(SIMULATION_CONFIG_CONTRACT["runModePolicy"][mode]["providerCalls"], "blocked")
 
     def test_simulation_config_rejects_incompatible_instrument_and_budget_above_allocation(self):
         allocation = build_allocation_policy(bot_allocation_usd=1000.0, reserved_usd=100.0)
@@ -183,6 +203,41 @@ class ContractTests(unittest.TestCase):
             gateway.preview_order({"symbol": "SPY"})
         with self.assertRaises(PermissionError):
             gateway.submit_order({"symbol": "SPY"})
+
+    def test_provider_metadata_snapshot_never_echoes_unsafe_caller_values(self):
+        snapshot = build_provider_metadata_snapshot(
+            [
+                {
+                    "providerId": "acct-real-123",
+                    "displayName": "operator@example.test",
+                    "status": "ready",
+                    "providerCalls": "enabled",
+                    "credentials": {"apiKey": "api-secret-abcdef12"},
+                    "accountData": {"accountId": "acct-real-123"},
+                    "marketData": {"token": "token-secret-abcdef12"},
+                    "orderPreview": {"orderId": "order-real-123"},
+                    "demoExecution": "enabled",
+                    "liveExecution": "enabled",
+                    "supportedModes": ["simulation", "trading"],
+                    "safetyPosture": {"privateAccountData": {"accountId": "acct-real-123"}},
+                    "capabilities": {"portfolioRead": {"OAuthToken": "oauth-secret-abcdef12"}},
+                }
+            ]
+        )
+        serialized = json.dumps(snapshot, sort_keys=True)
+
+        self.assertFalse(snapshot["validation"]["ok"])
+        self.assertEqual(snapshot["providers"][0]["providerId"], "unknown")
+        self.assertEqual(snapshot["providers"][0]["displayName"], "Unknown provider")
+        self.assertEqual(snapshot["providers"][0]["credentials"], "not-loaded")
+        self.assertEqual(snapshot["providers"][0]["accountData"], "absent")
+        self.assertEqual(snapshot["providers"][0]["safetyPosture"], snapshot["safetyPosture"])
+        self.assertNotIn("acct-real-123", serialized)
+        self.assertNotIn("operator@example.test", serialized)
+        self.assertNotIn("api-secret-abcdef12", serialized)
+        self.assertNotIn("token-secret-abcdef12", serialized)
+        self.assertNotIn("order-real-123", serialized)
+        self.assertNotIn("oauth-secret-abcdef12", serialized)
 
 
 if __name__ == "__main__":
