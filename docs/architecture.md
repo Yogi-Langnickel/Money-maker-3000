@@ -12,13 +12,15 @@ backtests, audit ledgers, and eventual reconciliation design.
 The runtime package lives under `src/money_maker_3000/`.
 
 - `contracts.py`: simulation config, run-mode policy, allocation policy, and
-  validators.
-- `strategies.py`: predefined registry and registry validator.
+  validators, including per-strategy allowlisted parameter schemas.
+- `strategies.py`: predefined registry, parameter-schema metadata, and registry
+  validator.
 - `risk.py`: pure fail-closed risk gate.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
   accumulator plus selected-period market diagnostics for dashboard charting.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
-- `ledger.py`: redacted append/read/report JSONL audit records.
+- `ledger.py`: redacted append/read/report JSONL audit records with
+  exclusive writer locking around duplicate checks and append.
 - `reconciliation.py`: simulation-only reconciliation records that redact
   provider/account fields and feed the pure risk-state contract.
 - `providers.py`: metadata-only provider boundary and disabled execution
@@ -52,6 +54,15 @@ context only. It performs no provider calls, persists no account-linked data,
 redacts provider balance/account identifiers in DTOs, and only marks
 reconciliation available when provider state is known-read-only and loss,
 drawdown, exposure, and open-position context are complete.
+
+## Ledger Boundary
+
+The local JSONL ledger is append-only at the application layer and remains
+synthetic/redacted. `append_ledger_record` validates the DTO, acquires a
+sidecar writer lock, checks existing run and correlation identities while the
+lock is held, then appends and fsyncs one compact JSON line. This keeps repeated
+or concurrent simulation worker attempts idempotent without introducing live
+provider state, account identifiers, or an external storage dependency.
 
 ## EC2 And DynamoDB Direction
 
@@ -101,7 +112,7 @@ adapter without a separate provider/execution review.
 Historical market data is offline fixture only. The parser uses stdlib `csv`
 with date/schema validation and exposes an iterator-based bar parser. Reducers
 are single-pass accumulators and avoid materializing bars except in tiny fixture
-test helpers.
+test helpers or bounded period diagnostics.
 
 Backtest DTOs include deterministic metadata:
 
@@ -111,6 +122,7 @@ Backtest DTOs include deterministic metadata:
 - first/last date
 - row count
 - input SHA-256
+- `maxFixtureRows`, defaulting to 10,000 rows
 - parser version
 - Python version
 - explicit `startedAt`
@@ -121,10 +133,21 @@ cadence/risk gate behavior, and fixture source/date coverage. It must not
 report real PnL, win rate, Sharpe ratio, drawdown, execution quality, or
 profitability claims.
 
+Strategy parameters are declarative JSON only and validated against
+allowlisted schemas in `contracts.py`. CLI JSON input fails fast on unknown
+keys or out-of-range values before report generation. Backtest reports include
+`strategy-intent-diagnostics.v1` for deterministic candidate-order context, but
+intent remains `skip` while provider calls are blocked and execution routes are
+absent.
+
 Period diagnostics are market-history change context only. They include source,
 coverage state, start/end dates, start/end closes, absolute change, percentage
 change, and bar count for the selected window. They are intended for dashboard
 instrument-row charts and must not be described as bot performance.
+
+The period-diagnostics path keeps a bounded in-memory fixture buffer. Historical
+fixture reports fail fast when the input exceeds `maxFixtureRows`; callers may
+raise the limit only for explicit offline fixture analysis.
 
 ## Audit Ledger
 

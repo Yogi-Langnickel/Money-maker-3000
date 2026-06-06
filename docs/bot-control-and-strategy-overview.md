@@ -1,0 +1,89 @@
+# Bot Control And Strategy Overview
+
+Status: active simulation design
+Created: 2026-06-06
+
+Money-maker-3000 remains a simulation-only worker core. The eToro Dashboard can
+show bot state, strategy selection, budget posture, redacted audit summaries,
+and safe controls, but it must not execute strategy code or place orders.
+
+## Control Model
+
+| Control | Source of truth | Current state |
+| --- | --- | --- |
+| Run mode | `contracts.py` | `backtest` only; `execute`, `trade`, and `trading` are rejected. |
+| Strategy list | `strategies.py` registry | Predefined entries only; arbitrary uploaded/operator code is blocked. |
+| Strategy parameters | `contracts.py` schemas | Allowlisted per predefined strategy; unknown keys and out-of-range values fail before CLI report generation. |
+| Allocation | Internal bot allocation policy | Separate from provider/demo balance; provider balances are ignored for sizing. |
+| Risk gate | `risk.py` | Fail-closed before any candidate intent can become an order intent. |
+| Provider state | Metadata snapshot | Provider calls, credentials, account data, order previews, demo execution, and live execution are unavailable. |
+| Audit | Local redacted JSONL ledger helpers | Synthetic/redacted diagnostics only; no account-linked provider data; duplicate checks and appends are single-writer locked. |
+| Dashboard controls | Future worker DTO consumer | Disabled until worker API, auth, CSRF, rate limits, and review gates exist. |
+
+## Required Risk Gates
+
+Every strategy must stay behind the existing fail-closed checks:
+
+- run mode is `backtest`
+- provider calls are blocked
+- execution routes are absent
+- allocation and strategy allocation IDs exist
+- reconciliation input exists and is fresh enough
+- selected strategy/instrument is valid for the registry
+- data freshness is valid
+- daily, weekly, and allocation drawdown policy is present
+- per-order cap, exposure cap, open-position cap, and cash reserve are present
+- leverage is exactly `1`
+- shorts, copy trading, CFDs, options, derivatives, and crypto are blocked
+
+## Predefined Strategies
+
+| Strategy ID | Purpose | Instruments / markets | Cadence | Config knobs to model next |
+| --- | --- | --- | --- | --- |
+| `dca-cash-reserve` | Scheduled long-only accumulation while preserving cash reserve. | `EQUITY`, `ETF`; `US_EQUITIES`, `AU_EQUITIES`. | Daily | `fixedOrderUsd`, `orderFractionPct`, `cashReserveFloorUsd`, `maxOrdersPerWeek`, `cooldownDays`. |
+| `threshold-rebalance` | Drift-based portfolio balancing without shorts or leverage. | `EQUITY`, `ETF`, `COMMODITY`; `US_EQUITIES`, `AU_EQUITIES`, `COMMODITIES`. | Weekly | `targetWeights`, `rebalanceThresholdPct`, `maxOrderUsd`, `minCashReserveUsd`, `maxOpenPositions`. |
+| `volatility-band-accumulator` | Conservative buy-skip diagnostics when daily movement enters a historical volatility band. | `EQUITY`, `ETF`; `US_EQUITIES`, `AU_EQUITIES`. | Daily | `lookbackDays`, `dropTriggerPct`, `maxOrderUsd`, `maxOrdersPerWeek`, `cooldownDays`, `cashReserveFloorUsd`. |
+| `slow-trend-allocation` | Long-only slow trend filter for hold/add/skip backtest behavior. | `EQUITY`, `ETF`; `US_EQUITIES`, `AU_EQUITIES`. | Weekly | `shortLookbackDays`, `longLookbackDays`, `confirmationBars`, `orderFractionPct`, `maxOrderUsd`. |
+| `news-aware-watchlist` | Context annotations and blackout flags only. News cannot create orders, recommendations, or sizing. | Context may cover allowed registry markets; trading output is absent. | Daily | `contextTtlDays`, `sourceLabels`, `blackoutTags`, `severityThreshold`. |
+
+Backtest reports include `strategy-intent-diagnostics.v1` for deterministic
+candidate-order context, but the intent remains `skip`, provider calls stay
+blocked, execution routes stay absent, and output carries no profitability
+claim.
+
+## Future Strategy Candidates
+
+A read-only strategy-design subagent review on 2026-06-06 recommended these
+future predefined candidates, pending separate schema/test implementation:
+
+- `calendar-accumulator`
+- `moving-average-pullback-accumulator`
+- `drawdown-ladder-accumulator`
+- `cash-reserve-replenish-hold`
+- `static-basket-contribution`
+
+## Fixture Needs
+
+Use only offline CSV fixtures with this schema:
+
+```text
+symbol,date,open,high,low,close,volume,source
+```
+
+Recommended fixture coverage:
+
+- `dca-cash-reserve`: existing `SPY`, plus one AU equity or ETF fixture.
+- `threshold-rebalance`: multi-symbol batch with an equity ETF, AU ETF, and
+  `GLD`-style commodity ETF/non-CFD fixture.
+- `volatility-band-accumulator`: stable, falling, and recovering daily windows.
+- `slow-trend-allocation`: at least 250 daily bars for slow-window diagnostics.
+- `news-aware-watchlist`: synthetic/redacted context fixture only; no provider
+  payloads, account data, or news-driven order fields.
+
+## Next Implementation Slice
+
+1. Add durable worker leases before any scheduled worker operation.
+1. Add dashboard rendering for the schema metadata and intent diagnostics.
+1. Add the next predefined strategy only after schema and safety tests are
+   written first.
+1. Keep dashboard-facing DTO changes redacted and simulation-only.

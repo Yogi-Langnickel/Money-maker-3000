@@ -26,6 +26,7 @@ DEFAULT_SCENARIOS = (
     {"scenarioId": "rebalance-1500", "strategyId": "threshold-rebalance", "budgetUsd": 1500.0},
     {"scenarioId": "watchlist-1000", "strategyId": "news-aware-watchlist", "budgetUsd": 1000.0},
 )
+DEFAULT_MAX_FIXTURE_ROWS = 10_000
 
 
 @dataclass(frozen=True)
@@ -90,11 +91,51 @@ class DecisionSummaryAccumulator:
         }
 
 
+def build_intent_diagnostics(run: dict[str, Any], bar: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = run["simulationConfig"]
+    parameters = config.get("strategyParameters", {})
+    strategy_id = run["strategyId"]
+    candidate_order_usd = _candidate_order_usd(strategy_id, parameters, config["budgetUsd"])
+    reasons = list(run["vetoes"])
+    if run["configValidation"].get("warnings"):
+        reasons.extend(run["configValidation"]["warnings"])
+    return {
+        "dtoVersion": "strategy-intent-diagnostics.v1",
+        "strategyId": strategy_id,
+        "strategyVersion": run["strategyVersion"],
+        "selectedInstrument": config["selectedInstrument"],
+        "strategyParameters": parameters,
+        "bar": bar or {},
+        "candidateIntent": "skip",
+        "candidateOrderUsd": candidate_order_usd,
+        "blockedByRiskGate": run["riskResult"] == "blocked",
+        "riskDecision": run["riskDecision"]["decision"],
+        "reasons": reasons,
+        "providerCalls": "blocked",
+        "executionRoute": "absent",
+        "accountData": "absent",
+        "performanceClaims": "diagnostics-only-no-order-or-profitability-claim",
+    }
+
+
+def _candidate_order_usd(strategy_id: str, parameters: dict[str, Any], budget_usd: float) -> float | None:
+    if strategy_id == "news-aware-watchlist":
+        return None
+    if "fixedOrderUsd" in parameters:
+        return round(min(float(parameters["fixedOrderUsd"]), float(budget_usd)), 2)
+    if "maxOrderUsd" in parameters and "orderFractionPct" in parameters:
+        return round(min(float(parameters["maxOrderUsd"]), float(budget_usd) * float(parameters["orderFractionPct"])), 2)
+    if "maxOrderUsd" in parameters:
+        return round(min(float(parameters["maxOrderUsd"]), float(budget_usd)), 2)
+    return None
+
+
 def iter_decision_events(
     bars: Iterable[Bar],
     *,
     strategy_id: str = "dca-cash-reserve",
     selected_instrument: dict[str, Any] | None = None,
+    strategy_parameters: dict[str, Any] | None = None,
     budget_usd: float = 1000.0,
     allocation_policy: dict[str, Any] | None = None,
     started_at: datetime | None = None,
@@ -110,6 +151,7 @@ def iter_decision_events(
                 "runMode": "backtest",
                 "budgetUsd": float(budget_usd),
                 "selectedInstrument": selected,
+                **({"strategyParameters": strategy_parameters} if strategy_parameters is not None else {}),
             },
         )
         freshness = assess_data_freshness(
@@ -150,7 +192,12 @@ def build_synthetic_backtest(
     scenario_summaries = []
     summary_accumulator = DecisionSummaryAccumulator()
     for index, scenario in enumerate(scenarios):
-        allocation = build_allocation_policy(bot_allocation_usd=max(float(scenario.get("budgetUsd", 1000.0)), 1000.0))
+        scenario_id = str(scenario.get("scenarioId", f"synthetic-{index + 1}"))
+        allocation = scenario.get("allocationPolicy")
+        if allocation is None:
+            allocation = build_allocation_policy(
+                bot_allocation_usd=max(float(scenario.get("budgetUsd", 1000.0)), 1000.0)
+            )
         run = build_simulation_run(
             strategy_id=scenario["strategyId"],
             now=started,
@@ -160,10 +207,12 @@ def build_synthetic_backtest(
             },
             allocation_policy=allocation,
             risk_state=RiskInputState(data_freshness="fresh"),
+            run_id_suffix=f"{scenario_id}-{index + 1}",
         )
         event = DecisionEvent(eventId=f"synthetic-{index + 1}", bar={}, run=run)
         summary_accumulator.update(event)
         run_objects.append(run)
+        intent_diagnostics = build_intent_diagnostics(run)
         runs.append(
             {
                 "runId": run["runId"],
@@ -175,6 +224,7 @@ def build_synthetic_backtest(
                 "budgetRemainingUsd": run["budget"]["remainingUsd"],
                 "vetoes": run["vetoes"],
                 "configWarnings": run["configValidation"]["warnings"],
+                "intentDiagnostics": intent_diagnostics,
             }
         )
         scenario_summaries.append(
@@ -202,6 +252,7 @@ def build_synthetic_backtest(
                 "vetoes": run["vetoes"],
                 "providerCalls": run["providerMetadata"]["providerCalls"],
                 "executionRoute": run["tradeLogEntry"]["executionRoute"],
+                "intentDiagnostics": intent_diagnostics,
             }
         )
     return {
@@ -229,11 +280,15 @@ def build_historical_fixture_backtest(
     bars: Iterable[Bar],
     strategy_id: str = "dca-cash-reserve",
     selected_instrument: dict[str, Any],
+    strategy_parameters: dict[str, Any] | None = None,
     budget_usd: float = 1000.0,
     allocation_policy: dict[str, Any] | None = None,
     started_at: datetime | None = None,
     input_sha256: str | None = None,
+    max_fixture_rows: int = DEFAULT_MAX_FIXTURE_ROWS,
 ) -> dict[str, Any]:
+    if max_fixture_rows <= 0:
+        raise ValueError("max fixture rows must be positive")
     started = started_at or datetime.fromisoformat("2026-05-15T00:00:00+00:00")
     history = MarketHistoryAccumulator()
     period_bars: list[Bar] = []
@@ -241,15 +296,17 @@ def build_historical_fixture_backtest(
     scenario_summaries: list[dict[str, Any]] = []
     runs: list[dict[str, Any]] = []
     for event in iter_decision_events(
-        _tee_history(bars, history, period_bars),
+        _tee_history(bars, history, period_bars, max_rows=max_fixture_rows),
         strategy_id=strategy_id,
         selected_instrument=selected_instrument,
+        strategy_parameters=strategy_parameters,
         budget_usd=budget_usd,
         allocation_policy=allocation_policy,
         started_at=started,
     ):
         event_summary.update(event)
         run = event.run
+        intent_diagnostics = build_intent_diagnostics(run, event.bar)
         runs.append(
             {
                 "runId": run["runId"],
@@ -261,6 +318,7 @@ def build_historical_fixture_backtest(
                 "budgetRemainingUsd": run["budget"]["remainingUsd"],
                 "vetoes": run["vetoes"],
                 "configWarnings": run["configValidation"]["warnings"],
+                "intentDiagnostics": intent_diagnostics,
             }
         )
         scenario_summaries.append(
@@ -280,6 +338,7 @@ def build_historical_fixture_backtest(
                 "vetoes": run["vetoes"],
                 "providerCalls": run["providerMetadata"]["providerCalls"],
                 "executionRoute": run["tradeLogEntry"]["executionRoute"],
+                "intentDiagnostics": intent_diagnostics,
             }
         )
 
@@ -300,6 +359,7 @@ def build_historical_fixture_backtest(
             "firstDate": history_summary["firstDate"],
             "lastDate": history_summary["lastDate"],
             "rowCount": history_summary["barCount"],
+            "maxFixtureRows": max_fixture_rows,
             "inputSha256": input_sha256,
             "parserVersion": PARSER_VERSION,
             "pythonVersion": platform.python_version(),
@@ -409,8 +469,12 @@ def _tee_history(
     bars: Iterable[Bar],
     accumulator: MarketHistoryAccumulator,
     period_bars: list[Bar],
+    *,
+    max_rows: int,
 ) -> Iterator[Bar]:
-    for bar in bars:
+    for row_count, bar in enumerate(bars, start=1):
+        if row_count > max_rows:
+            raise ValueError(f"offline fixture row count exceeds maxFixtureRows={max_rows}")
         accumulator.update(bar)
         period_bars.append(bar)
         yield bar

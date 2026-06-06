@@ -1,4 +1,6 @@
 import json
+import multiprocessing
+import os
 import tempfile
 import unittest
 from datetime import datetime
@@ -36,6 +38,14 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-dail
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
 SELECTED_SPY = {"symbol": "SPY", "market": "US_EQUITIES", "instrumentClass": "ETF"}
 SELECTED_GLD = {"symbol": "GLD", "market": "US_EQUITIES", "instrumentClass": "ETF"}
+
+
+def _append_duplicate_ledger_worker(ledger_path: str, record: dict, queue: multiprocessing.Queue) -> None:
+    try:
+        append_ledger_record(ledger_path, record)
+        queue.put(("ok", record["runId"]))
+    except Exception as exc:  # pragma: no cover - assertion happens in parent.
+        queue.put(("error", type(exc).__name__, str(exc)))
 
 
 class RiskAndBacktestTests(unittest.TestCase):
@@ -348,6 +358,13 @@ class RiskAndBacktestTests(unittest.TestCase):
             report = build_historical_fixture_backtest(
                 bars=iter_market_history_bars(source, selected_symbol="SPY"),
                 selected_instrument=SELECTED_SPY,
+                strategy_parameters={
+                    "fixedOrderUsd": 125.0,
+                    "orderFractionPct": 0.1,
+                    "cashReserveFloorUsd": 100.0,
+                    "maxOrdersPerWeek": 2,
+                    "cooldownDays": 1,
+                },
                 started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
                 input_sha256=input_sha,
             )
@@ -362,13 +379,45 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["firstDate"], "2026-05-11")
         self.assertEqual(report["metadata"]["lastDate"], "2026-05-13")
         self.assertEqual(report["metadata"]["rowCount"], 3)
+        self.assertEqual(report["metadata"]["maxFixtureRows"], 10000)
         self.assertEqual(report["metadata"]["inputSha256"], input_sha)
         self.assertEqual(report["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
         self.assertEqual(report["periodDiagnostics"]["periods"][0]["period"], "24h")
         self.assertEqual(report["periodDiagnostics"]["periods"][-1]["period"], "max")
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["dtoVersion"], "strategy-intent-diagnostics.v1")
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["candidateIntent"], "skip")
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["candidateOrderUsd"], 125.0)
+        self.assertTrue(report["runs"][0]["intentDiagnostics"]["blockedByRiskGate"])
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["providerCalls"], "blocked")
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["executionRoute"], "absent")
+        self.assertEqual(
+            report["runs"][0]["intentDiagnostics"]["performanceClaims"],
+            "diagnostics-only-no-order-or-profitability-claim",
+        )
         for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
         self.assertEqual(report["metadata"]["performanceClaims"], "diagnostics-only-no-return-or-execution-quality-metrics")
+
+    def test_historical_fixture_backtest_rejects_large_fixture_inputs(self):
+        with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            with self.assertRaisesRegex(ValueError, "maxFixtureRows=2"):
+                build_historical_fixture_backtest(
+                    bars=iter_market_history_bars(source, selected_symbol="SPY"),
+                    selected_instrument=SELECTED_SPY,
+                    started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                    max_fixture_rows=2,
+                )
+
+        with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            report = build_historical_fixture_backtest(
+                bars=iter_market_history_bars(source, selected_symbol="SPY"),
+                selected_instrument=SELECTED_SPY,
+                started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                max_fixture_rows=3,
+            )
+
+        self.assertEqual(report["metadata"]["rowCount"], 3)
+        self.assertEqual(report["metadata"]["maxFixtureRows"], 3)
 
     def test_synthetic_backtest_includes_coverage_and_veto_diagnostics(self):
         report = build_synthetic_backtest()
@@ -378,6 +427,11 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["summary"]["blockedCount"], 4)
         self.assertEqual(report["summary"]["vetoHistogram"]["execution-route-absent"], 4)
         self.assertEqual(report["scenarioSummaries"][0]["providerCalls"], "blocked")
+        run_ids = [run["runId"] for run in report["runs"]]
+        scenario_ids = [scenario["scenarioId"] for scenario in report["scenarioSummaries"]]
+        self.assertEqual(len(run_ids), len(set(run_ids)))
+        for scenario_id, run_id in zip(scenario_ids, run_ids, strict=True):
+            self.assertIn(scenario_id, run_id)
 
     def test_ledger_records_are_append_only_redacted_and_reportable(self):
         report = build_synthetic_backtest(include_ledger_records=True)
@@ -386,24 +440,107 @@ class RiskAndBacktestTests(unittest.TestCase):
             run={**record, "tradeLogEntry": {"accountId": "acct-real-123", "apiKey": "secret"}},
         )
 
+        self.assertEqual(record["tradeLogEntry"]["correlationId"], record["correlationId"])
         self.assertEqual(record["allocation"]["providerDemoBalance"], "redacted")
         self.assertEqual(unsafe["tradeLogEntry"]["accountId"], "redacted")
         self.assertEqual(unsafe["providerCallStatus"], "not-attempted")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             ledger_path = Path(temp_dir) / "ledger.jsonl"
-            append_ledger_record(ledger_path, record)
-            append_ledger_record(ledger_path, {**record, "runId": "sim-second"})
+            for ledger_record in report["ledgerRecords"]:
+                append_ledger_record(ledger_path, ledger_record)
             records = read_ledger_records(ledger_path)
             ledger_report = build_ledger_report(records=records)
             serialized = json.dumps(ledger_report)
 
-        self.assertEqual(ledger_report["summary"]["recordCount"], 2)
+        self.assertEqual(ledger_report["summary"]["recordCount"], len(report["ledgerRecords"]))
         self.assertEqual(ledger_report["providerCalls"], "blocked")
         self.assertEqual(ledger_report["demoExecution"], "blocked")
         self.assertEqual(ledger_report["summary"]["redaction"]["providerDemoBalance"], "redacted")
         self.assertNotIn("acct-real-123", serialized)
         self.assertNotIn("secret", serialized)
+
+    def test_ledger_append_rejects_unknown_sensitive_and_duplicate_records(self):
+        report = build_synthetic_backtest(include_ledger_records=True)
+        record = report["ledgerRecords"][0]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "ledger.jsonl"
+            append_ledger_record(ledger_path, record)
+
+            with self.assertRaisesRegex(ValueError, "runId"):
+                append_ledger_record(ledger_path, {**record, "correlationId": "corr-other"})
+            with self.assertRaisesRegex(ValueError, "correlationId"):
+                append_ledger_record(ledger_path, {**record, "runId": "run-other"})
+            with self.assertRaisesRegex(ValueError, "unsupported fields"):
+                append_ledger_record(
+                    ledger_path,
+                    {**record, "runId": "run-third", "correlationId": "corr-third", "accountId": "acct-real-123"},
+                )
+            with self.assertRaisesRegex(ValueError, "unredacted sensitive data"):
+                append_ledger_record(
+                    ledger_path,
+                    {
+                        **record,
+                        "runId": "run-fourth",
+                        "correlationId": "corr-fourth",
+                        "tradeLogEntry": {"accountId": "acct-real-123"},
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "unredacted sensitive data"):
+                append_ledger_record(
+                    ledger_path,
+                    {
+                        **record,
+                        "runId": "run-fifth",
+                        "correlationId": "corr-fifth",
+                        "tradeLogEntry": {"note": "manual check for acct-real-123"},
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "unredacted sensitive data"):
+                append_ledger_record(
+                    ledger_path,
+                    {
+                        **record,
+                        "runId": "run-sixth",
+                        "correlationId": "corr-sixth",
+                        "tradeLogEntry": {"memo": "operator@example.test"},
+                    },
+                )
+
+    def test_ledger_append_is_single_writer_across_processes(self):
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("single-writer ledger test requires fork-capable multiprocessing")
+
+        report = build_synthetic_backtest(include_ledger_records=True)
+        record = report["ledgerRecords"][0]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "ledger.jsonl"
+            context = multiprocessing.get_context("fork")
+            queue = context.Queue()
+            processes = [
+                context.Process(target=_append_duplicate_ledger_worker, args=(os.fspath(ledger_path), record, queue))
+                for _ in range(8)
+            ]
+
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=10)
+
+            self.assertTrue(all(process.exitcode == 0 for process in processes))
+            results = [queue.get(timeout=1) for _ in processes]
+            records = read_ledger_records(ledger_path)
+
+        self.assertEqual(len([result for result in results if result[0] == "ok"]), 1)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["runId"], record["runId"])
+        self.assertEqual(records[0]["correlationId"], record["correlationId"])
+        self.assertEqual(
+            len([result for result in results if result[0] == "error" and "already contains" in result[2]]),
+            7,
+        )
 
     def test_redaction_preserves_safe_fields(self):
         redacted = redact_trade_log_entry(
@@ -412,6 +549,7 @@ class RiskAndBacktestTests(unittest.TestCase):
                 "reasonCode": "provider-not-connected",
                 "portfolioBalance": 12345,
                 "OAuthToken": "token",
+                "note": "manual check for order-real-123",
             }
         )
 
@@ -419,6 +557,7 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(redacted["reasonCode"], "provider-not-connected")
         self.assertEqual(redacted["portfolioBalance"], "redacted")
         self.assertEqual(redacted["OAuthToken"], "redacted")
+        self.assertEqual(redacted["note"], "redacted")
         self.assertEqual(redacted["providerCall"], "not-attempted")
 
 

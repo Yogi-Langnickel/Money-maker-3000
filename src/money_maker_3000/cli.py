@@ -10,11 +10,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from money_maker_3000.backtest import (
+    DEFAULT_MAX_FIXTURE_ROWS,
     build_historical_fixture_backtest,
     build_offline_fixture_batch_diagnostics,
     build_synthetic_backtest,
 )
-from money_maker_3000.contracts import build_allocation_policy, validate_run_mode
+from money_maker_3000.contracts import build_allocation_policy, validate_run_mode, validate_strategy_parameters
 from money_maker_3000.ledger import export_ledger_report
 from money_maker_3000.market_history import iter_market_history_bars, sha256_file
 
@@ -48,7 +49,9 @@ def _build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--reserved-usd", type=float, default=100.0)
     backtest.add_argument("--max-order-usd", type=float, default=250.0)
     backtest.add_argument("--provider-demo-balance-usd", type=float)
+    backtest.add_argument("--strategy-params-json", help="JSON object of allowlisted parameters for the predefined strategy")
     backtest.add_argument("--history-csv", type=Path, help="offline market-history CSV fixture")
+    backtest.add_argument("--max-fixture-rows", type=int, default=DEFAULT_MAX_FIXTURE_ROWS)
     backtest.add_argument("--started-at", help="explicit ISO timestamp for deterministic metadata")
 
     fixture_batch = subparsers.add_parser(
@@ -72,6 +75,8 @@ def _build_parser() -> argparse.ArgumentParser:
     fixture_batch.add_argument("--reserved-usd", type=float, default=100.0)
     fixture_batch.add_argument("--max-order-usd", type=float, default=250.0)
     fixture_batch.add_argument("--provider-demo-balance-usd", type=float)
+    fixture_batch.add_argument("--strategy-params-json", help="JSON object of allowlisted parameters for the predefined strategy")
+    fixture_batch.add_argument("--max-fixture-rows", type=int, default=DEFAULT_MAX_FIXTURE_ROWS)
     fixture_batch.add_argument("--started-at", help="explicit ISO timestamp for deterministic metadata")
 
     ledger_report = subparsers.add_parser("ledger-report", help="export a redacted JSONL ledger report")
@@ -94,6 +99,8 @@ def run_backtest(args: argparse.Namespace) -> dict[str, Any]:
         provider_demo_balance_usd=args.provider_demo_balance_usd,
     )
     started_at = _parse_started_at(args.started_at)
+    strategy_parameters = _parse_strategy_params_json(args.strategy_params_json)
+    _validate_strategy_parameters_for_cli(args.strategy_id, strategy_parameters)
     if args.history_csv:
         input_sha256 = sha256_file(args.history_csv)
         with args.history_csv.open("r", encoding="utf-8", newline="") as source:
@@ -102,12 +109,29 @@ def run_backtest(args: argparse.Namespace) -> dict[str, Any]:
                 bars=bars,
                 strategy_id=args.strategy_id,
                 selected_instrument=selected_instrument,
+                strategy_parameters=strategy_parameters,
                 budget_usd=args.budget_usd,
                 allocation_policy=allocation,
                 started_at=started_at,
                 input_sha256=input_sha256,
+                max_fixture_rows=args.max_fixture_rows,
             )
-    return build_synthetic_backtest(started_at=started_at)
+    return build_synthetic_backtest(
+        scenarios=[
+            {
+                "scenarioId": f"{args.strategy_id}-{args.symbol}-cli",
+                "strategyId": args.strategy_id,
+                "budgetUsd": args.budget_usd,
+                "simulationConfig": {
+                    "runMode": "backtest",
+                    "selectedInstrument": selected_instrument,
+                    **({"strategyParameters": strategy_parameters} if strategy_parameters else {}),
+                },
+                "allocationPolicy": allocation,
+            }
+        ],
+        started_at=started_at,
+    )
 
 
 def run_fixture_batch(args: argparse.Namespace) -> dict[str, Any]:
@@ -119,6 +143,7 @@ def run_fixture_batch(args: argparse.Namespace) -> dict[str, Any]:
         max_order_usd=args.max_order_usd,
         provider_demo_balance_usd=args.provider_demo_balance_usd,
     )
+    strategy_parameters = _parse_strategy_params_json(args.strategy_params_json)
     entries = _load_fixture_batch_entries(args)
     reports = []
     for entry in entries:
@@ -129,18 +154,23 @@ def run_fixture_batch(args: argparse.Namespace) -> dict[str, Any]:
             "market": str(entry.get("market", args.market)),
             "instrumentClass": str(entry.get("instrumentClass", args.instrument_class)),
         }
+        entry_strategy_id = str(entry.get("strategyId", args.strategy_id))
+        entry_strategy_parameters = _entry_strategy_parameters(entry, strategy_parameters)
+        _validate_strategy_parameters_for_cli(entry_strategy_id, entry_strategy_parameters)
         input_sha256 = sha256_file(fixture_path)
         with fixture_path.open("r", encoding="utf-8", newline="") as source:
             bars = iter_market_history_bars(source, selected_symbol=symbol)
             reports.append(
                 build_historical_fixture_backtest(
                     bars=bars,
-                    strategy_id=str(entry.get("strategyId", args.strategy_id)),
+                    strategy_id=entry_strategy_id,
                     selected_instrument=selected_instrument,
+                    strategy_parameters=entry_strategy_parameters,
                     budget_usd=float(entry.get("budgetUsd", args.budget_usd)),
                     allocation_policy=allocation,
                     started_at=started_at,
                     input_sha256=input_sha256,
+                    max_fixture_rows=int(entry.get("maxFixtureRows", args.max_fixture_rows)),
                 )
             )
     return build_offline_fixture_batch_diagnostics(reports=reports, started_at=started_at)
@@ -199,6 +229,35 @@ def _normalize_manifest_entry(raw_entry: dict[str, Any], *, manifest_root: Path,
     entry["symbol"] = str(symbol)
     entry["path"] = fixture_path
     return entry
+
+
+def _parse_strategy_params_json(raw_value: str | None) -> dict[str, Any] | None:
+    if raw_value is None:
+        return None
+    parsed = json.loads(raw_value)
+    if not isinstance(parsed, dict):
+        raise ValueError("strategy params JSON must be an object")
+    return parsed
+
+
+def _entry_strategy_parameters(
+    entry: dict[str, Any],
+    fallback: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if "strategyParameters" not in entry:
+        return fallback
+    strategy_parameters = entry["strategyParameters"]
+    if not isinstance(strategy_parameters, dict):
+        raise ValueError("fixture batch manifest strategyParameters must be an object")
+    return strategy_parameters
+
+
+def _validate_strategy_parameters_for_cli(strategy_id: str, parameters: dict[str, Any] | None) -> None:
+    if parameters is None:
+        return
+    result = validate_strategy_parameters(strategy_id, parameters)
+    if not result.ok:
+        raise ValueError("; ".join(result.errors))
 
 
 def main(argv: list[str] | None = None) -> int:

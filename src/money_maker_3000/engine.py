@@ -95,18 +95,24 @@ def build_simulation_run(
     )
 
     run_id = f"sim-{evaluated_at}"
+    normalized_run_id_suffix = ""
     if run_id_suffix:
-        normalized_suffix = "".join(
+        normalized_run_id_suffix = "".join(
             character if character.isalnum() or character in {"-", "_"} else "-"
             for character in run_id_suffix
         ).strip("-")
-        if normalized_suffix:
-            run_id = f"{run_id}-{normalized_suffix}"
+        if normalized_run_id_suffix:
+            run_id = f"{run_id}-{normalized_run_id_suffix}"
+
+    correlation_id = f"corr-{config_hash[:16]}"
+    if normalized_run_id_suffix:
+        suffix_hash = hashlib.sha256(normalized_run_id_suffix.encode("utf-8")).hexdigest()[:8]
+        correlation_id = f"{correlation_id}-{suffix_hash}"
 
     return {
         "dtoVersion": "simulation-run.v1",
         "runId": run_id,
-        "correlationId": f"corr-{config_hash[:16]}",
+        "correlationId": correlation_id,
         "strategyId": strategy["strategyId"] if strategy else effective_config["strategyId"],
         "strategyVersion": strategy["version"] if strategy else "unknown",
         "configVersion": CONFIG_VERSION,
@@ -129,6 +135,7 @@ def build_simulation_run(
             "allowedMarkets": list(effective_config["allowedMarkets"]),
             "allowedInstrumentClasses": list(effective_config["allowedInstrumentClasses"]),
             "cadence": deepcopy(effective_config["cadence"]),
+            "strategyParameters": deepcopy(effective_config["strategyParameters"]),
             "execution": deepcopy(effective_config["execution"]),
         },
         "configValidation": risk_decision["validations"]["simulationConfig"],
@@ -142,7 +149,7 @@ def build_simulation_run(
         "positionContext": deepcopy(SYNTHETIC_POSITION_CONTEXT),
         "tradeLogEntry": {
             "tradeLogId": f"trade-log-{evaluated_at}",
-            "correlationId": f"corr-{config_hash[:16]}",
+            "correlationId": correlation_id,
             "action": "simulated-skip",
             "strategyId": strategy["strategyId"] if strategy else effective_config["strategyId"],
             "strategyVersion": strategy["version"] if strategy else "unknown",

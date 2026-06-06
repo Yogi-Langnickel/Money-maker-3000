@@ -42,9 +42,81 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "historical-fixture-backtest")
         self.assertEqual(payload["providerCalls"], "blocked")
         self.assertEqual(payload["metadata"]["rowCount"], 3)
+        self.assertEqual(payload["metadata"]["maxFixtureRows"], 10000)
         self.assertEqual(payload["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
         self.assertEqual(payload["periodDiagnostics"]["periods"][0]["period"], "24h")
         self.assertEqual(payload["scenarioSummaries"][0]["allocation"]["providerDemoBalance"], "redacted")
+
+    def test_backtest_cli_accepts_allowlisted_strategy_parameter_json(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(FIXTURE_PATH),
+            "--symbol",
+            "SPY",
+            "--market",
+            "US_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--strategy-params-json",
+            json.dumps({"fixedOrderUsd": 125.0, "maxOrdersPerWeek": 2}),
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        diagnostics = payload["runs"][0]["intentDiagnostics"]
+        self.assertEqual(diagnostics["candidateOrderUsd"], 125.0)
+        self.assertEqual(diagnostics["strategyParameters"]["fixedOrderUsd"], 125.0)
+        self.assertEqual(diagnostics["strategyParameters"]["maxOrdersPerWeek"], 2)
+        self.assertEqual(diagnostics["providerCalls"], "blocked")
+        self.assertEqual(diagnostics["executionRoute"], "absent")
+
+    def test_backtest_cli_synthetic_run_honors_selected_strategy_inputs(self):
+        result = self.run_cli(
+            "backtest",
+            "--strategy",
+            "slow-trend-allocation",
+            "--symbol",
+            "QQQ",
+            "--market",
+            "US_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--budget-usd",
+            "750",
+            "--bot-allocation-usd",
+            "900",
+            "--reserved-usd",
+            "100",
+            "--max-order-usd",
+            "125",
+            "--strategy-params-json",
+            json.dumps(
+                {
+                    "shortLookbackDays": 20,
+                    "longLookbackDays": 120,
+                    "confirmationBars": 2,
+                    "orderFractionPct": 0.1,
+                    "maxOrderUsd": 125,
+                }
+            ),
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        scenario = payload["scenarioSummaries"][0]
+        diagnostics = scenario["intentDiagnostics"]
+        self.assertEqual(payload["summary"]["eventCount"], 1)
+        self.assertEqual(scenario["strategyId"], "slow-trend-allocation")
+        self.assertEqual(scenario["selectedInstrument"]["symbol"], "QQQ")
+        self.assertEqual(scenario["requestedBudgetUsd"], 750.0)
+        self.assertEqual(scenario["allocation"]["botAllocationUsd"], 900.0)
+        self.assertEqual(diagnostics["strategyParameters"]["maxOrderUsd"], 125)
+        self.assertEqual(diagnostics["candidateOrderUsd"], 75.0)
 
     def test_fixture_batch_cli_runs_manifest_without_provider_calls(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -98,6 +170,34 @@ class CliTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["coverage"]["fixtureCount"], 2)
         self.assertEqual([item["symbol"] for item in payload["perSymbolDiagnostics"]], ["SPY", "GLD"])
+
+    def test_backtest_cli_rejects_fixture_over_row_limit(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(FIXTURE_PATH),
+            "--symbol",
+            "SPY",
+            "--max-fixture-rows",
+            "2",
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("maxFixtureRows=2", result.stderr)
+
+    def test_backtest_cli_rejects_unknown_strategy_parameter_json(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(FIXTURE_PATH),
+            "--symbol",
+            "SPY",
+            "--strategy-params-json",
+            json.dumps({"executionRoute": "demo"}),
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported strategy parameters", result.stderr)
 
     def test_cli_rejects_execute_and_trade_modes(self):
         for mode in ("execute", "trade", "trading"):

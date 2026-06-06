@@ -30,11 +30,23 @@ PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest \
   --started-at 2026-05-15T00:00:00Z
 ```
 
+Offline fixture backtest with allowlisted strategy parameters:
+
+```sh
+PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest \
+  --history-csv tests/fixtures/market_history/spy-daily.csv \
+  --strategy dca-cash-reserve \
+  --strategy-params-json '{"fixedOrderUsd":125,"maxOrdersPerWeek":2}' \
+  --started-at 2026-05-15T00:00:00Z
+```
+
 Historical fixture backtests include a `periodDiagnostics` DTO for dashboard
 portfolio charting. It covers `24h`, `1w`, `1m`, `1y`, `5y`, and `max` with
 market-history change values, coverage state, source, and freshness-safe
 metadata. These are market context diagnostics only, not bot profitability,
 real P/L, win-rate, drawdown, Sharpe ratio, or execution-quality metrics.
+The period-diagnostics fixture buffer is capped by `--max-fixture-rows`, which
+defaults to 10,000 rows.
 
 `--mode execute`, `--mode trade`, and `--mode trading` are rejected before any
 work runs.
@@ -62,6 +74,8 @@ PYTHONPATH=src python3.13 -m unittest discover tests
 
 - Python package under `src/money_maker_3000/`.
 - Predefined strategy registry only.
+- Strategy parameters are schema allowlisted per predefined strategy; unknown
+  keys or out-of-range values fail before CLI report generation.
 - Explicit run mode contract: `backtest` is allowed, `execute` is disabled.
 - Internal allocation ledger fields separate bot allocation from any
   provider/demo account balance: `bot_allocation_usd`, `reserved_usd`,
@@ -83,10 +97,17 @@ PYTHONPATH=src python3.13 -m unittest discover tests
 - Offline market-history diagnostics now emit selected-period context for
   `24h`, `1w`, `1m`, `1y`, `5y`, and `max`, suitable for dashboard
   instrument rows without provider calls or account data.
+- Historical fixture reports fail fast above `maxFixtureRows` instead of
+  materializing unbounded period-diagnostics input.
 - Backtest output is diagnostics only: coverage, veto counts, config errors,
   cadence/risk gate behavior, fixture source/date coverage, deterministic
   SHA-256 input metadata, parser version, Python version, and explicit
   `started_at`.
+- Backtests include `strategy-intent-diagnostics.v1` candidate-intent context,
+  but intent remains skipped while risk/provider/execution gates are blocked.
+- Redacted local JSONL ledger appends are single-writer locked so run and
+  correlation duplicate checks happen in the same critical section as the
+  append.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
   claims, provider calls, or account-linked persistence.
 

@@ -12,7 +12,9 @@ SIMULATION_CONTRACT_VERSION = "0.1.0-sim"
 SIMULATION_MARKETS = ("US_EQUITIES", "AU_EQUITIES", "FOREX", "COMMODITIES")
 SIMULATION_INSTRUMENT_CLASSES = ("EQUITY", "ETF", "FOREX", "COMMODITY")
 BLOCKED_SIMULATION_INSTRUMENT_CLASSES = ("CFD", "CRYPTO", "DERIVATIVE", "OPTION")
-SIMULATION_RUN_MODES = ("backtest", "execute")
+SIMULATION_ALLOWED_RUN_MODES = ("backtest",)
+SIMULATION_DISABLED_RUN_MODES = ("execute",)
+SIMULATION_RUN_MODES = SIMULATION_ALLOWED_RUN_MODES + SIMULATION_DISABLED_RUN_MODES
 SIMULATION_CADENCES = ("daily", "weekly")
 MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES = 240
 MAX_SIMULATION_DECISIONS_PER_DAY = 3
@@ -58,6 +60,22 @@ SIMULATION_STRATEGY_CONFIG_RULES = {
         "allowedMarkets": ("US_EQUITIES", "AU_EQUITIES", "COMMODITIES"),
         "allowedInstrumentClasses": ("EQUITY", "ETF", "COMMODITY"),
     },
+    "volatility-band-accumulator": {
+        "name": "Volatility band accumulator",
+        "version": "0.1.0-sim",
+        "status": "simulation-only",
+        "cadence": "daily",
+        "allowedMarkets": ("US_EQUITIES", "AU_EQUITIES"),
+        "allowedInstrumentClasses": ("EQUITY", "ETF"),
+    },
+    "slow-trend-allocation": {
+        "name": "Slow trend allocation",
+        "version": "0.1.0-sim",
+        "status": "simulation-only",
+        "cadence": "weekly",
+        "allowedMarkets": ("US_EQUITIES", "AU_EQUITIES"),
+        "allowedInstrumentClasses": ("EQUITY", "ETF"),
+    },
     "news-aware-watchlist": {
         "name": "News-aware watchlist",
         "version": "0.1.0-plan",
@@ -65,6 +83,48 @@ SIMULATION_STRATEGY_CONFIG_RULES = {
         "cadence": "daily",
         "allowedMarkets": ("US_EQUITIES", "AU_EQUITIES", "FOREX", "COMMODITIES"),
         "allowedInstrumentClasses": ("EQUITY", "ETF", "FOREX", "COMMODITY"),
+    },
+}
+
+SIMULATION_STRATEGY_PARAMETER_SCHEMAS = {
+    "dca-cash-reserve": {
+        "fixedOrderUsd": {"type": "number", "minimum": 25.0, "maximum": 250.0, "default": 100.0},
+        "orderFractionPct": {"type": "number", "minimum": 0.01, "maximum": 0.25, "default": 0.1},
+        "cashReserveFloorUsd": {"type": "number", "minimum": 100.0, "maximum": 1000.0, "default": 100.0},
+        "maxOrdersPerWeek": {"type": "integer", "minimum": 1, "maximum": 3, "default": 2},
+        "cooldownDays": {"type": "integer", "minimum": 1, "maximum": 14, "default": 1},
+    },
+    "threshold-rebalance": {
+        "targetWeights": {
+            "type": "weights",
+            "default": {"SPY": 0.7, "GLD": 0.3},
+            "maxSymbols": 8,
+        },
+        "rebalanceThresholdPct": {"type": "number", "minimum": 1.0, "maximum": 20.0, "default": 5.0},
+        "maxOrderUsd": {"type": "number", "minimum": 25.0, "maximum": 250.0, "default": 250.0},
+        "minCashReserveUsd": {"type": "number", "minimum": 100.0, "maximum": 1000.0, "default": 100.0},
+        "maxOpenPositions": {"type": "integer", "minimum": 1, "maximum": 3, "default": 3},
+    },
+    "volatility-band-accumulator": {
+        "lookbackDays": {"type": "integer", "minimum": 5, "maximum": 252, "default": 20},
+        "dropTriggerPct": {"type": "number", "minimum": 1.0, "maximum": 15.0, "default": 3.0},
+        "maxOrderUsd": {"type": "number", "minimum": 25.0, "maximum": 250.0, "default": 150.0},
+        "maxOrdersPerWeek": {"type": "integer", "minimum": 1, "maximum": 3, "default": 1},
+        "cooldownDays": {"type": "integer", "minimum": 1, "maximum": 14, "default": 3},
+        "cashReserveFloorUsd": {"type": "number", "minimum": 100.0, "maximum": 1000.0, "default": 150.0},
+    },
+    "slow-trend-allocation": {
+        "shortLookbackDays": {"type": "integer", "minimum": 10, "maximum": 100, "default": 50},
+        "longLookbackDays": {"type": "integer", "minimum": 60, "maximum": 252, "default": 200},
+        "confirmationBars": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3},
+        "orderFractionPct": {"type": "number", "minimum": 0.01, "maximum": 0.2, "default": 0.1},
+        "maxOrderUsd": {"type": "number", "minimum": 25.0, "maximum": 250.0, "default": 150.0},
+    },
+    "news-aware-watchlist": {
+        "contextTtlDays": {"type": "integer", "minimum": 1, "maximum": 14, "default": 3},
+        "sourceLabels": {"type": "stringList", "maxItems": 8, "default": ["market-calendar", "issuer-filings"]},
+        "blackoutTags": {"type": "stringList", "maxItems": 12, "default": ["earnings", "regulatory-halt"]},
+        "severityThreshold": {"type": "enum", "values": ["low", "medium", "high"], "default": "medium"},
     },
 }
 
@@ -85,6 +145,7 @@ DEFAULT_SIMULATION_CONFIG = {
         "minimumEvaluationIntervalMinutes": MINIMUM_SIMULATION_EVALUATION_INTERVAL_MINUTES,
         "maxDecisionsPerDay": MAX_SIMULATION_DECISIONS_PER_DAY,
     },
+    "strategyParameters": {},
     "execution": {
         "mode": "simulation-only",
         "liveTrading": "blocked",
@@ -113,6 +174,8 @@ DEFAULT_ALLOCATION_POLICY = {
     "strategyAllocationIds": {
         "dca-cash-reserve": "alloc-sim-dca",
         "threshold-rebalance": "alloc-sim-rebalance",
+        "volatility-band-accumulator": "alloc-sim-volatility-band",
+        "slow-trend-allocation": "alloc-sim-slow-trend",
         "news-aware-watchlist": "alloc-sim-watchlist",
     },
     "botAllocationUsd": 1000.0,
@@ -139,7 +202,13 @@ SIMULATION_CONFIG_CONTRACT = {
     "markets": list(SIMULATION_MARKETS),
     "instrumentClasses": list(SIMULATION_INSTRUMENT_CLASSES),
     "blockedInstrumentClasses": list(BLOCKED_SIMULATION_INSTRUMENT_CLASSES),
-    "runModes": list(SIMULATION_RUN_MODES),
+    "runModes": list(SIMULATION_ALLOWED_RUN_MODES),
+    "allowedRunModes": list(SIMULATION_ALLOWED_RUN_MODES),
+    "disabledRunModes": {
+        mode: deepcopy(policy)
+        for mode, policy in SIMULATION_RUN_MODE_POLICY.items()
+        if not policy.get("enabled")
+    },
     "runModePolicy": deepcopy(SIMULATION_RUN_MODE_POLICY),
     "marketInstrumentClassRules": {
         market: list(classes) for market, classes in SIMULATION_MARKET_INSTRUMENT_CLASS_RULES.items()
@@ -152,6 +221,7 @@ SIMULATION_CONFIG_CONTRACT = {
             **rule,
             "allowedMarkets": list(rule["allowedMarkets"]),
             "allowedInstrumentClasses": list(rule["allowedInstrumentClasses"]),
+            "parameterSchema": deepcopy(SIMULATION_STRATEGY_PARAMETER_SCHEMAS[strategy_id]),
         }
         for strategy_id, rule in SIMULATION_STRATEGY_CONFIG_RULES.items()
     },
@@ -188,7 +258,16 @@ def default_simulation_config_for_strategy(strategy_id: str = "dca-cash-reserve"
     config["allowedMarkets"] = list(rule["allowedMarkets"])
     config["allowedInstrumentClasses"] = list(rule["allowedInstrumentClasses"])
     config["cadence"]["frequency"] = rule["cadence"]
+    config["strategyParameters"] = default_strategy_parameters_for_strategy(strategy_id)
     return config
+
+
+def default_strategy_parameters_for_strategy(strategy_id: str = "dca-cash-reserve") -> dict[str, Any]:
+    schema = SIMULATION_STRATEGY_PARAMETER_SCHEMAS.get(
+        strategy_id,
+        SIMULATION_STRATEGY_PARAMETER_SCHEMAS["dca-cash-reserve"],
+    )
+    return {name: deepcopy(rule["default"]) for name, rule in schema.items()}
 
 
 def merge_simulation_config(strategy_id: str, simulation_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -197,7 +276,7 @@ def merge_simulation_config(strategy_id: str, simulation_config: dict[str, Any] 
     base = default_simulation_config_for_strategy(requested_strategy_id)
     merged = deepcopy(base)
     for key, value in incoming.items():
-        if key in {"selectedInstrument", "cadence", "execution"} and isinstance(value, dict):
+        if key in {"selectedInstrument", "cadence", "execution", "strategyParameters"} and isinstance(value, dict):
             merged[key].update(value)
         else:
             merged[key] = value
@@ -211,10 +290,10 @@ def validate_run_mode(run_mode: str | None) -> ValidationResult:
             ok=False,
             errors=("execution mode is disabled; only backtest mode is currently allowed",),
         )
-    if run_mode not in SIMULATION_RUN_MODES:
+    if run_mode not in SIMULATION_ALLOWED_RUN_MODES:
         return ValidationResult(
             ok=False,
-            errors=(f"run mode must be one of: {', '.join(SIMULATION_RUN_MODES)}",),
+            errors=(f"run mode must be one of: {', '.join(SIMULATION_ALLOWED_RUN_MODES)}",),
         )
     return ValidationResult(ok=True)
 
@@ -244,6 +323,78 @@ def _market_instrument_class_mismatches(markets: Any, instrument_classes: Any) -
         for instrument_class in SIMULATION_MARKET_INSTRUMENT_CLASS_RULES.get(market, ())
     }
     return [instrument_class for instrument_class in instrument_classes if instrument_class not in supported]
+
+
+def validate_strategy_parameters(strategy_id: str, parameters: dict[str, Any] | None = None) -> ValidationResult:
+    schema = SIMULATION_STRATEGY_PARAMETER_SCHEMAS.get(strategy_id)
+    if schema is None:
+        return ValidationResult(ok=False, errors=("strategy parameter schema is missing",))
+    if parameters is None:
+        parameters = default_strategy_parameters_for_strategy(strategy_id)
+    if not _is_plain_dict(parameters):
+        return ValidationResult(ok=False, errors=("strategy parameters must be an object",))
+
+    errors: list[str] = []
+    unknown_parameters = [name for name in parameters if name not in schema]
+    if unknown_parameters:
+        errors.append(f"unsupported strategy parameters: {', '.join(sorted(unknown_parameters))}")
+
+    for name, rule in schema.items():
+        value = parameters.get(name, rule["default"])
+        parameter_type = rule["type"]
+        label = f"strategy parameter {name}"
+        if parameter_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                errors.append(f"{label} must be an integer")
+                continue
+            if value < rule["minimum"] or value > rule["maximum"]:
+                errors.append(f"{label} must be between {rule['minimum']} and {rule['maximum']}")
+        elif parameter_type == "number":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                errors.append(f"{label} must be a number")
+                continue
+            if float(value) < rule["minimum"] or float(value) > rule["maximum"]:
+                errors.append(f"{label} must be between {rule['minimum']} and {rule['maximum']}")
+        elif parameter_type == "enum":
+            if value not in rule["values"]:
+                errors.append(f"{label} must be one of: {', '.join(rule['values'])}")
+        elif parameter_type == "stringList":
+            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+                errors.append(f"{label} must be a list of non-empty strings")
+                continue
+            if len(value) > rule["maxItems"]:
+                errors.append(f"{label} must contain at most {rule['maxItems']} items")
+        elif parameter_type == "weights":
+            errors.extend(_validate_strategy_weight_parameters(label, value, rule))
+        else:
+            errors.append(f"{label} has unsupported schema type")
+
+    if strategy_id == "slow-trend-allocation":
+        short_window = parameters.get("shortLookbackDays", schema["shortLookbackDays"]["default"])
+        long_window = parameters.get("longLookbackDays", schema["longLookbackDays"]["default"])
+        if isinstance(short_window, int) and isinstance(long_window, int) and short_window >= long_window:
+            errors.append("strategy parameter shortLookbackDays must be less than longLookbackDays")
+
+    return ValidationResult(ok=not errors, errors=tuple(errors))
+
+
+def _validate_strategy_weight_parameters(label: str, value: Any, rule: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not _is_plain_dict(value) or not value:
+        return [f"{label} must be an object of symbol weights"]
+    if len(value) > rule["maxSymbols"]:
+        errors.append(f"{label} must contain at most {rule['maxSymbols']} symbols")
+    total_weight = 0.0
+    for symbol, weight in value.items():
+        if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
+            errors.append(f"{label} symbols must be uppercase market symbols")
+        if not isinstance(weight, (int, float)) or isinstance(weight, bool) or float(weight) <= 0:
+            errors.append(f"{label} weights must be positive numbers")
+        else:
+            total_weight += float(weight)
+    if value and round(total_weight, 4) != 1.0:
+        errors.append(f"{label} weights must sum to 1.0")
+    return errors
 
 
 def validate_budget_policy(policy: dict[str, Any] = DEFAULT_BUDGET_POLICY) -> ValidationResult:
@@ -357,6 +508,12 @@ def validate_simulation_config(
         errors.append("strategy must come from the predefined registry")
     elif strategy.get("status") == "live":
         errors.append("live strategies are not allowed")
+    else:
+        parameter_result = validate_strategy_parameters(
+            strategy["strategyId"],
+            effective_config.get("strategyParameters"),
+        )
+        errors.extend(parameter_result.errors)
 
     run_mode_result = validate_run_mode(effective_config.get("runMode"))
     errors.extend(run_mode_result.errors)

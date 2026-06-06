@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
+    fcntl = None
 
 from money_maker_3000.contracts import utc_iso
 
@@ -14,6 +21,42 @@ SENSITIVE_KEY_PATTERN = re.compile(
     r"(account|api[-_]?key|auth|balance|credential|email|holding|jwt|name|oauth|order|portfolio|position|secret|statement|token|transaction|user[-_]?key)",
     re.I,
 )
+SENSITIVE_VALUE_PATTERNS = (
+    re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
+    re.compile(
+        r"\b(?:acct|account|ord|order|pos|position|txn|transaction)[_-](?=[A-Za-z0-9_-]*\d)[A-Za-z0-9][A-Za-z0-9_-]{3,}\b",
+        re.I,
+    ),
+    re.compile(r"\b(?:api|oauth|jwt|token|secret)[_-][A-Za-z0-9][A-Za-z0-9_-]{7,}\b", re.I),
+)
+SAFE_SENSITIVE_VALUES = {REDACTED, ABSENT, "not-attempted", "ignored-for-budget", None}
+SAFE_SENSITIVE_KEYS = {"maxOrderUsd"}
+SIMULATION_AUDIT_RECORD_KEYS = frozenset(
+    {
+        "ledgerVersion",
+        "dtoVersion",
+        "recordedAt",
+        "correlationId",
+        "runId",
+        "mode",
+        "environment",
+        "strategyId",
+        "strategyVersion",
+        "configVersion",
+        "configHash",
+        "allocationId",
+        "strategyAllocationId",
+        "allocation",
+        "decision",
+        "riskResult",
+        "riskDecision",
+        "vetoes",
+        "dataFreshness",
+        "providerCallStatus",
+        "executionRoute",
+        "tradeLogEntry",
+    }
+)
 
 
 def _redact_value(value: Any) -> Any:
@@ -21,6 +64,8 @@ def _redact_value(value: Any) -> Any:
         return [_redact_value(item) for item in value]
     if isinstance(value, dict):
         return redact_mapping(value)
+    if _looks_sensitive_scalar(value):
+        return REDACTED
     return value
 
 
@@ -94,17 +139,85 @@ def build_ledger_record(
 def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dict[str, Any]:
     if not ledger_path:
         raise TypeError("ledger path is required")
+    validated_record = _validate_simulation_audit_record(record)
     path = Path(ledger_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as output:
-        output.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
-    return record
+    with _exclusive_ledger_writer(path):
+        if path.exists():
+            _reject_duplicate_ledger_identity(path, validated_record)
+        with path.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(validated_record, sort_keys=True, separators=(",", ":")) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+    return validated_record
 
 
 def read_ledger_records(ledger_path: str | Path) -> list[dict[str, Any]]:
     path = Path(ledger_path)
     with path.open("r", encoding="utf-8") as source:
         return [json.loads(line) for line in source if line.strip()]
+
+
+def _validate_simulation_audit_record(record: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        raise TypeError("ledger record must be a JSON object")
+    unknown_keys = sorted(set(record) - SIMULATION_AUDIT_RECORD_KEYS)
+    if unknown_keys:
+        raise ValueError(f"ledger record has unsupported fields: {', '.join(unknown_keys)}")
+    if record.get("dtoVersion") != "simulation-audit-record.v2":
+        raise ValueError("ledger record must use simulation-audit-record.v2")
+    if record.get("mode") != "simulation" or record.get("environment") != "synthetic":
+        raise ValueError("ledger record must be simulation/synthetic only")
+    if _has_unredacted_sensitive_value(record):
+        raise ValueError("ledger record contains unredacted sensitive data")
+    return dict(record)
+
+
+def _has_unredacted_sensitive_value(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_has_unredacted_sensitive_value(item) for item in value)
+    if not isinstance(value, dict):
+        return _looks_sensitive_scalar(value)
+    for key, item in value.items():
+        if SENSITIVE_KEY_PATTERN.search(str(key)) and str(key) not in SAFE_SENSITIVE_KEYS:
+            if isinstance(item, (dict, list)) or item not in SAFE_SENSITIVE_VALUES:
+                return True
+        if _has_unredacted_sensitive_value(item):
+            return True
+    return False
+
+
+def _looks_sensitive_scalar(value: Any) -> bool:
+    if value in SAFE_SENSITIVE_VALUES or not isinstance(value, str):
+        return False
+    return any(pattern.search(value) for pattern in SENSITIVE_VALUE_PATTERNS)
+
+
+def _reject_duplicate_ledger_identity(path: Path, record: dict[str, Any]) -> None:
+    run_id = record.get("runId")
+    correlation_id = record.get("correlationId")
+    for existing in read_ledger_records(path):
+        if run_id and existing.get("runId") == run_id:
+            raise ValueError(f"ledger already contains runId: {run_id}")
+        if correlation_id and existing.get("correlationId") == correlation_id:
+            raise ValueError(f"ledger already contains correlationId: {correlation_id}")
+
+
+def _ledger_lock_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.lock")
+
+
+@contextmanager
+def _exclusive_ledger_writer(path: Path) -> Iterator[None]:
+    if fcntl is None:
+        raise OSError("exclusive ledger writer lock requires POSIX fcntl support")
+    lock_path = _ledger_lock_path(path)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _increment(histogram: dict[str, int], values: Iterable[str]) -> None:
