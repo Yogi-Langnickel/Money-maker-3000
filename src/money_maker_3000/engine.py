@@ -13,6 +13,7 @@ from money_maker_3000.contracts import (
     SIMULATION_CONFIG_CONTRACT,
     default_simulation_config_for_strategy,
     merge_simulation_config,
+    safe_strategy_parameters_for_output,
     utc_iso,
 )
 from money_maker_3000.providers import build_provider_metadata_snapshot
@@ -83,6 +84,10 @@ def build_simulation_run(
     strategy = strategy_by_id(effective_config["strategyId"])
     if strategy:
         effective_config["strategyVersion"] = strategy["version"]
+    safe_strategy_parameters = safe_strategy_parameters_for_output(
+        effective_config["strategyId"],
+        effective_config.get("strategyParameters"),
+    )
     config_hash = stable_config_hash(effective_config, effective_allocation_policy, effective_risk_policy)
     risk_decision = evaluate_risk_gate(
         simulation_config=effective_config,
@@ -135,7 +140,7 @@ def build_simulation_run(
             "allowedMarkets": list(effective_config["allowedMarkets"]),
             "allowedInstrumentClasses": list(effective_config["allowedInstrumentClasses"]),
             "cadence": deepcopy(effective_config["cadence"]),
-            "strategyParameters": deepcopy(effective_config["strategyParameters"]),
+            "strategyParameters": safe_strategy_parameters,
             "execution": deepcopy(effective_config["execution"]),
         },
         "configValidation": risk_decision["validations"]["simulationConfig"],

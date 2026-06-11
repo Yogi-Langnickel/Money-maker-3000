@@ -97,6 +97,24 @@ class ContractTests(unittest.TestCase):
         self.assertIn("confirmationBars must be between", joined)
         self.assertIn("orderFractionPct must be between", joined)
         self.assertIn("maxOrderUsd must be between", joined)
+        self.assertNotIn("providerUrl", joined)
+
+    def test_strategy_parameter_schema_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                result = validate_strategy_parameters(
+                    "dca-cash-reserve",
+                    {
+                        "fixedOrderUsd": value,
+                        "orderFractionPct": 0.1,
+                        "cashReserveFloorUsd": 100.0,
+                        "maxOrdersPerWeek": 2,
+                        "cooldownDays": 1,
+                    },
+                )
+
+                self.assertFalse(result.ok)
+                self.assertIn("fixedOrderUsd must be a finite number", " ".join(result.errors))
 
     def test_weight_parameter_schema_requires_normalized_synthetic_weights(self):
         result = validate_strategy_parameters(
@@ -163,6 +181,7 @@ class ContractTests(unittest.TestCase):
 
         self.assertFalse(result.ok)
         self.assertIn("unsupported strategy parameters", " ".join(result.errors))
+        self.assertNotIn("executionRoute", " ".join(result.errors))
 
     def test_allocation_policy_separates_provider_demo_balance_from_bot_allocation(self):
         policy = build_allocation_policy(

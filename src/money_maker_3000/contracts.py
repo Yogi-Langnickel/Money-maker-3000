@@ -4,6 +4,7 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import isfinite
 from typing import Any
 
 SIMULATION_CONTRACT_SOURCE = "Money-maker-3000/src/money_maker_3000/contracts.py"
@@ -351,7 +352,7 @@ def validate_strategy_parameters(strategy_id: str, parameters: dict[str, Any] | 
     errors: list[str] = []
     unknown_parameters = [name for name in parameters if name not in schema]
     if unknown_parameters:
-        errors.append(f"unsupported strategy parameters: {', '.join(sorted(unknown_parameters))}")
+        errors.append("unsupported strategy parameters are not allowed")
 
     for name, rule in schema.items():
         value = parameters.get(name, rule["default"])
@@ -364,8 +365,8 @@ def validate_strategy_parameters(strategy_id: str, parameters: dict[str, Any] | 
             if value < rule["minimum"] or value > rule["maximum"]:
                 errors.append(f"{label} must be between {rule['minimum']} and {rule['maximum']}")
         elif parameter_type == "number":
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
-                errors.append(f"{label} must be a number")
+            if not _is_finite_number(value):
+                errors.append(f"{label} must be a finite number")
                 continue
             if float(value) < rule["minimum"] or float(value) > rule["maximum"]:
                 errors.append(f"{label} must be between {rule['minimum']} and {rule['maximum']}")
@@ -402,13 +403,26 @@ def _validate_strategy_weight_parameters(label: str, value: Any, rule: dict[str,
     for symbol, weight in value.items():
         if not isinstance(symbol, str) or not SYMBOL_PATTERN.fullmatch(symbol):
             errors.append(f"{label} symbols must be uppercase market symbols")
-        if not isinstance(weight, (int, float)) or isinstance(weight, bool) or float(weight) <= 0:
-            errors.append(f"{label} weights must be positive numbers")
+        if not _is_finite_number(weight) or float(weight) <= 0:
+            errors.append(f"{label} weights must be positive finite numbers")
         else:
             total_weight += float(weight)
     if value and round(total_weight, 4) != 1.0:
         errors.append(f"{label} weights must sum to 1.0")
     return errors
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(float(value))
+
+
+def safe_strategy_parameters_for_output(strategy_id: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    defaults = default_strategy_parameters_for_strategy(strategy_id)
+    result = validate_strategy_parameters(strategy_id, parameters)
+    if not result.ok:
+        return defaults
+    source = parameters or defaults
+    return {name: deepcopy(source.get(name, default_value)) for name, default_value in defaults.items()}
 
 
 def validate_budget_policy(policy: dict[str, Any] = DEFAULT_BUDGET_POLICY) -> ValidationResult:

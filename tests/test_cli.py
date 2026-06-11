@@ -73,6 +73,27 @@ class CliTests(unittest.TestCase):
         self.assertEqual(diagnostics["providerCalls"], "blocked")
         self.assertEqual(diagnostics["executionRoute"], "absent")
 
+    def test_backtest_cli_rejects_non_finite_strategy_parameter_json(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(FIXTURE_PATH),
+            "--symbol",
+            "SPY",
+            "--market",
+            "US_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--strategy-params-json",
+            '{"fixedOrderUsd":NaN}',
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("fixedOrderUsd must be a finite number", result.stderr)
+        self.assertEqual(result.stdout, "")
+
     def test_backtest_cli_synthetic_run_honors_selected_strategy_inputs(self):
         result = self.run_cli(
             "backtest",

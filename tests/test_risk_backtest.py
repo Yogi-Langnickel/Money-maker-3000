@@ -14,6 +14,7 @@ from money_maker_3000.backtest import (
     summarize_decision_events,
 )
 from money_maker_3000.contracts import build_allocation_policy, default_simulation_config_for_strategy
+from money_maker_3000.engine import build_simulation_run
 from money_maker_3000.ledger import (
     append_ledger_record,
     build_ledger_record,
@@ -433,6 +434,41 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(len(run_ids), len(set(run_ids)))
         for scenario_id, run_id in zip(scenario_ids, run_ids, strict=True):
             self.assertIn(scenario_id, run_id)
+
+    def test_invalid_strategy_parameters_are_not_echoed_in_run_or_backtest_output(self):
+        run = build_simulation_run(
+            strategy_id="dca-cash-reserve",
+            simulation_config={
+                "strategyParameters": {
+                    "fixedOrderUsd": 125.0,
+                    "apiKey": "api-secret-abcdef12",
+                }
+            },
+        )
+        report = build_synthetic_backtest(
+            scenarios=[
+                {
+                    "scenarioId": "unsafe-params",
+                    "strategyId": "dca-cash-reserve",
+                    "simulationConfig": {
+                        "strategyParameters": {
+                            "fixedOrderUsd": 125.0,
+                            "apiKey": "api-secret-abcdef12",
+                        }
+                    },
+                }
+            ]
+        )
+        serialized_run = json.dumps(run, allow_nan=False)
+        serialized_report = json.dumps(report, allow_nan=False)
+
+        self.assertIn("unsupported strategy parameters", " ".join(run["configValidation"]["errors"]))
+        self.assertEqual(run["simulationConfig"]["strategyParameters"]["fixedOrderUsd"], 100.0)
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["strategyParameters"]["fixedOrderUsd"], 100.0)
+        self.assertEqual(report["runs"][0]["intentDiagnostics"]["candidateOrderUsd"], 100.0)
+        for serialized in (serialized_run, serialized_report):
+            self.assertNotIn("apiKey", serialized)
+            self.assertNotIn("api-secret-abcdef12", serialized)
 
     def test_ledger_records_are_append_only_redacted_and_reportable(self):
         report = build_synthetic_backtest(include_ledger_records=True)
