@@ -10,6 +10,7 @@ from money_maker_3000.contracts import (
     SIMULATION_MARKET_INSTRUMENT_CLASS_RULES,
     SIMULATION_MARKETS,
     SIMULATION_STRATEGY_CONFIG_RULES,
+    SIMULATION_STRATEGY_PARAMETER_SCHEMAS,
     ValidationResult,
 )
 
@@ -22,16 +23,31 @@ STRATEGY_REGISTRY = [
     {
         "strategyId": "dca-cash-reserve",
         **SIMULATION_STRATEGY_CONFIG_RULES["dca-cash-reserve"],
+        "parameterSchema": SIMULATION_STRATEGY_PARAMETER_SCHEMAS["dca-cash-reserve"],
         "expectedHoldingPeriod": "weeks-to-months",
     },
     {
         "strategyId": "threshold-rebalance",
         **SIMULATION_STRATEGY_CONFIG_RULES["threshold-rebalance"],
+        "parameterSchema": SIMULATION_STRATEGY_PARAMETER_SCHEMAS["threshold-rebalance"],
         "expectedHoldingPeriod": "weeks-to-months",
+    },
+    {
+        "strategyId": "volatility-band-accumulator",
+        **SIMULATION_STRATEGY_CONFIG_RULES["volatility-band-accumulator"],
+        "parameterSchema": SIMULATION_STRATEGY_PARAMETER_SCHEMAS["volatility-band-accumulator"],
+        "expectedHoldingPeriod": "weeks-to-months-with-cooldowns",
+    },
+    {
+        "strategyId": "slow-trend-allocation",
+        **SIMULATION_STRATEGY_CONFIG_RULES["slow-trend-allocation"],
+        "parameterSchema": SIMULATION_STRATEGY_PARAMETER_SCHEMAS["slow-trend-allocation"],
+        "expectedHoldingPeriod": "months",
     },
     {
         "strategyId": "news-aware-watchlist",
         **SIMULATION_STRATEGY_CONFIG_RULES["news-aware-watchlist"],
+        "parameterSchema": SIMULATION_STRATEGY_PARAMETER_SCHEMAS["news-aware-watchlist"],
         "expectedHoldingPeriod": "not-trading-from-news",
     },
 ]
@@ -39,6 +55,7 @@ STRATEGY_REGISTRY = [
 for strategy in STRATEGY_REGISTRY:
     strategy["allowedMarkets"] = list(strategy["allowedMarkets"])
     strategy["allowedInstrumentClasses"] = list(strategy["allowedInstrumentClasses"])
+    strategy["parameterSchema"] = deepcopy(strategy["parameterSchema"])
 
 
 def strategy_by_id(strategy_id: str) -> dict[str, Any] | None:
@@ -91,6 +108,16 @@ def validate_strategy_registry(registry: list[dict[str, Any]] | None = None) -> 
             errors.append(f"{label} live strategies are not allowed")
         if strategy.get("cadence") not in SIMULATION_CADENCES:
             errors.append(f"{label} cadence must be low-frequency daily or weekly")
+        parameter_schema = strategy.get("parameterSchema")
+        expected_parameter_schema = (
+            SIMULATION_STRATEGY_PARAMETER_SCHEMAS.get(strategy_id)
+            if isinstance(strategy_id, str)
+            else None
+        )
+        if not isinstance(parameter_schema, dict) or not parameter_schema:
+            errors.append(f"{label} must expose an allowlisted parameter schema")
+        elif expected_parameter_schema is not None and parameter_schema != expected_parameter_schema:
+            errors.append(f"{label} parameter schema must match the predefined contract")
 
         allowed_markets = strategy.get("allowedMarkets")
         if not isinstance(allowed_markets, list) or len(allowed_markets) == 0:

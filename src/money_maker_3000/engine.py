@@ -13,6 +13,7 @@ from money_maker_3000.contracts import (
     SIMULATION_CONFIG_CONTRACT,
     default_simulation_config_for_strategy,
     merge_simulation_config,
+    safe_strategy_parameters_for_output,
     utc_iso,
 )
 from money_maker_3000.providers import build_provider_metadata_snapshot
@@ -83,6 +84,10 @@ def build_simulation_run(
     strategy = strategy_by_id(effective_config["strategyId"])
     if strategy:
         effective_config["strategyVersion"] = strategy["version"]
+    safe_strategy_parameters = safe_strategy_parameters_for_output(
+        effective_config["strategyId"],
+        effective_config.get("strategyParameters"),
+    )
     config_hash = stable_config_hash(effective_config, effective_allocation_policy, effective_risk_policy)
     risk_decision = evaluate_risk_gate(
         simulation_config=effective_config,
@@ -95,18 +100,24 @@ def build_simulation_run(
     )
 
     run_id = f"sim-{evaluated_at}"
+    normalized_run_id_suffix = ""
     if run_id_suffix:
-        normalized_suffix = "".join(
+        normalized_run_id_suffix = "".join(
             character if character.isalnum() or character in {"-", "_"} else "-"
             for character in run_id_suffix
         ).strip("-")
-        if normalized_suffix:
-            run_id = f"{run_id}-{normalized_suffix}"
+        if normalized_run_id_suffix:
+            run_id = f"{run_id}-{normalized_run_id_suffix}"
+
+    correlation_id = f"corr-{config_hash[:16]}"
+    if normalized_run_id_suffix:
+        suffix_hash = hashlib.sha256(normalized_run_id_suffix.encode("utf-8")).hexdigest()[:8]
+        correlation_id = f"{correlation_id}-{suffix_hash}"
 
     return {
         "dtoVersion": "simulation-run.v1",
         "runId": run_id,
-        "correlationId": f"corr-{config_hash[:16]}",
+        "correlationId": correlation_id,
         "strategyId": strategy["strategyId"] if strategy else effective_config["strategyId"],
         "strategyVersion": strategy["version"] if strategy else "unknown",
         "configVersion": CONFIG_VERSION,
@@ -129,6 +140,7 @@ def build_simulation_run(
             "allowedMarkets": list(effective_config["allowedMarkets"]),
             "allowedInstrumentClasses": list(effective_config["allowedInstrumentClasses"]),
             "cadence": deepcopy(effective_config["cadence"]),
+            "strategyParameters": safe_strategy_parameters,
             "execution": deepcopy(effective_config["execution"]),
         },
         "configValidation": risk_decision["validations"]["simulationConfig"],
@@ -142,7 +154,7 @@ def build_simulation_run(
         "positionContext": deepcopy(SYNTHETIC_POSITION_CONTEXT),
         "tradeLogEntry": {
             "tradeLogId": f"trade-log-{evaluated_at}",
-            "correlationId": f"corr-{config_hash[:16]}",
+            "correlationId": correlation_id,
             "action": "simulated-skip",
             "strategyId": strategy["strategyId"] if strategy else effective_config["strategyId"],
             "strategyVersion": strategy["version"] if strategy else "unknown",
