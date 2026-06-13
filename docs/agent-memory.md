@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-06-06
+Updated: 2026-06-13
 
 ## Current Truth
 
@@ -10,7 +10,8 @@ Updated: 2026-06-06
   `src/money_maker_3000/`; the previous Node runtime scaffold is retired.
 - The worker does not call eToro, load credentials, preview orders, place demo
   orders, place live orders, or expose execution routes.
-- CLI entrypoints are `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest`,
+- CLI entrypoints are `PYTHONPATH=src python3.13 -m money_maker_3000.cli readiness`,
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest`,
   `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch`, and
   `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report ...`.
 - Strategy selection comes only from the predefined registry in
@@ -49,6 +50,12 @@ Updated: 2026-06-06
   manifest or repeated `SYMBOL=PATH` CLI entries, aggregate coverage/veto
   summaries, and emit per-symbol SHA-256/parser metadata/period diagnostics
   with provider calls blocked.
+- Backtest readiness diagnostics emit `backtest-readiness.v1` for repeated
+  fixture entries or manifest entries. Readiness checks strategy registry,
+  allocation policy, run-mode policy, provider boundary, and offline fixtures;
+  it returns `ready: true` only for offline-backtest-only diagnostics with
+  provider calls blocked, execution routes absent, demo/live execution blocked,
+  and account data absent.
 - Backtests flow as `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary` and
   emit diagnostics only: coverage, veto counts, config errors, cadence/risk
   gate behavior, fixture source/date coverage, input SHA-256, parser version,
@@ -56,6 +63,11 @@ Updated: 2026-06-06
 - CLI synthetic backtests must honor the selected strategy, symbol, budget,
   allocation, and allowlisted strategy parameters instead of falling back to
   the default scenario batch.
+- CLI money inputs for backtest-style commands must be finite numbers. Budget,
+  bot allocation, max order, and provider demo balance must be positive;
+  reserved allocation must be non-negative. Direct run DTOs sanitize invalid
+  budget/allocation numbers before output while preserving config validation
+  errors.
 - Backtest reports include `strategy-intent-diagnostics.v1` candidate-order
   context only; intent remains skipped, provider calls are blocked, execution
   routes are absent, account data is absent, and no profitability claim is made.
@@ -84,6 +96,9 @@ Updated: 2026-06-06
 - `PYTHONPYCACHEPREFIX=.pycache python3.13 -m compileall src tests`: compile the
   Python package and tests.
 - `PYTHONPATH=src python3.13 -m unittest discover tests`: run the unittest suite.
+- `PYTHONPATH=src python3.13 -m money_maker_3000.cli readiness --fixture SPY=tests/fixtures/market_history/spy-daily.csv --fixture GLD=tests/fixtures/market_history/gld-daily.csv --started-at 2026-05-15T00:00:00Z`:
+  run the offline backtest readiness gate; current committed fixtures report
+  `ready: true` with provider calls blocked and execution absent.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest --history-csv tests/fixtures/market_history/spy-daily.csv --started-at 2026-05-15T00:00:00Z`:
   run the offline fixture diagnostics DTO, including selected-period market
   change diagnostics.

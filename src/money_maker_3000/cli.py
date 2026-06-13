@@ -6,6 +6,7 @@ import json
 import pstats
 import sys
 from datetime import datetime
+from math import isfinite
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,6 +19,11 @@ from money_maker_3000.backtest import (
 from money_maker_3000.contracts import build_allocation_policy, validate_run_mode, validate_strategy_parameters
 from money_maker_3000.ledger import export_ledger_report
 from money_maker_3000.market_history import iter_market_history_bars, sha256_file
+from money_maker_3000.readiness import (
+    FixtureReadinessSpec,
+    build_allocation_policy_for_readiness,
+    build_backtest_readiness_report,
+)
 
 
 def _parse_started_at(raw: str | None) -> datetime:
@@ -79,6 +85,31 @@ def _build_parser() -> argparse.ArgumentParser:
     fixture_batch.add_argument("--max-fixture-rows", type=int, default=DEFAULT_MAX_FIXTURE_ROWS)
     fixture_batch.add_argument("--started-at", help="explicit ISO timestamp for deterministic metadata")
 
+    readiness = subparsers.add_parser(
+        "readiness",
+        help="verify offline backtest readiness without provider calls or execution",
+    )
+    readiness.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
+    readiness.add_argument("--manifest", type=Path, help="JSON manifest with a fixtures array")
+    readiness.add_argument(
+        "--fixture",
+        action="append",
+        default=[],
+        metavar="SYMBOL=PATH",
+        help="offline fixture entry; may be repeated",
+    )
+    readiness.add_argument("--strategy", "--strategy-id", dest="strategy_id", default="dca-cash-reserve")
+    readiness.add_argument("--market", default="US_EQUITIES")
+    readiness.add_argument("--instrument-class", default="ETF")
+    readiness.add_argument("--budget-usd", type=float, default=1000.0)
+    readiness.add_argument("--bot-allocation-usd", type=float, default=1000.0)
+    readiness.add_argument("--reserved-usd", type=float, default=100.0)
+    readiness.add_argument("--max-order-usd", type=float, default=250.0)
+    readiness.add_argument("--provider-demo-balance-usd", type=float)
+    readiness.add_argument("--strategy-params-json", help="JSON object of allowlisted parameters for the predefined strategy")
+    readiness.add_argument("--max-fixture-rows", type=int, default=DEFAULT_MAX_FIXTURE_ROWS)
+    readiness.add_argument("--started-at", help="explicit ISO timestamp for deterministic metadata")
+
     ledger_report = subparsers.add_parser("ledger-report", help="export a redacted JSONL ledger report")
     ledger_report.add_argument("ledger_path", type=Path)
     ledger_report.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
@@ -87,6 +118,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def run_backtest(args: argparse.Namespace) -> dict[str, Any]:
     _reject_execution_mode(args.mode)
+    _validate_backtest_numeric_args(args)
     selected_instrument = {
         "symbol": args.symbol,
         "market": args.market,
@@ -136,6 +168,7 @@ def run_backtest(args: argparse.Namespace) -> dict[str, Any]:
 
 def run_fixture_batch(args: argparse.Namespace) -> dict[str, Any]:
     _reject_execution_mode(args.mode)
+    _validate_backtest_numeric_args(args)
     started_at = _parse_started_at(args.started_at)
     allocation = build_allocation_policy(
         bot_allocation_usd=args.bot_allocation_usd,
@@ -174,6 +207,40 @@ def run_fixture_batch(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
     return build_offline_fixture_batch_diagnostics(reports=reports, started_at=started_at)
+
+
+def run_readiness(args: argparse.Namespace) -> dict[str, Any]:
+    _reject_execution_mode(args.mode)
+    _validate_backtest_numeric_args(args)
+    started_at = _parse_started_at(args.started_at)
+    strategy_parameters = _parse_strategy_params_json(args.strategy_params_json)
+    entries = _load_fixture_batch_entries(args)
+    specs = []
+    for entry in entries:
+        entry_strategy_parameters = _entry_strategy_parameters(entry, strategy_parameters)
+        specs.append(
+            FixtureReadinessSpec(
+                symbol=str(entry["symbol"]),
+                path=Path(entry["path"]),
+                market=str(entry.get("market", args.market)),
+                instrument_class=str(entry.get("instrumentClass", args.instrument_class)),
+                strategy_id=str(entry.get("strategyId", args.strategy_id)),
+                budget_usd=float(entry.get("budgetUsd", args.budget_usd)),
+                max_fixture_rows=int(entry.get("maxFixtureRows", args.max_fixture_rows)),
+                strategy_parameters=entry_strategy_parameters,
+            )
+        )
+    allocation = build_allocation_policy_for_readiness(
+        bot_allocation_usd=args.bot_allocation_usd,
+        reserved_usd=args.reserved_usd,
+        max_order_usd=args.max_order_usd,
+        provider_demo_balance_usd=args.provider_demo_balance_usd,
+    )
+    return build_backtest_readiness_report(
+        fixture_specs=specs,
+        started_at=started_at,
+        allocation_policy=allocation,
+    )
 
 
 def run_ledger_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -215,6 +282,25 @@ def _load_fixture_batch_entries(args: argparse.Namespace) -> list[dict[str, Any]
     if not entries:
         raise ValueError("fixture-batch requires --manifest or at least one --fixture SYMBOL=PATH")
     return entries
+
+
+def _validate_backtest_numeric_args(args: argparse.Namespace) -> None:
+    _require_finite_usd("budget-usd", args.budget_usd, positive=True)
+    _require_finite_usd("bot-allocation-usd", args.bot_allocation_usd, positive=True)
+    _require_finite_usd("reserved-usd", args.reserved_usd, positive=False)
+    _require_finite_usd("max-order-usd", args.max_order_usd, positive=True)
+    provider_balance = getattr(args, "provider_demo_balance_usd", None)
+    if provider_balance is not None:
+        _require_finite_usd("provider-demo-balance-usd", provider_balance, positive=True)
+
+
+def _require_finite_usd(label: str, value: float, *, positive: bool) -> None:
+    if not isinstance(value, (int, float)) or not isfinite(float(value)):
+        raise ValueError(f"{label} must be a finite number")
+    if positive and float(value) <= 0:
+        raise ValueError(f"{label} must be positive")
+    if not positive and float(value) < 0:
+        raise ValueError(f"{label} must be non-negative")
 
 
 def _normalize_manifest_entry(raw_entry: dict[str, Any], *, manifest_root: Path, index: int) -> dict[str, Any]:
@@ -268,6 +354,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_backtest(args))
         elif args.command == "fixture-batch":
             result = _run_with_optional_profile(args.profile, lambda: run_fixture_batch(args))
+        elif args.command == "readiness":
+            result = _run_with_optional_profile(args.profile, lambda: run_readiness(args))
         elif args.command == "ledger-report":
             result = _run_with_optional_profile(args.profile, lambda: run_ledger_report(args))
         else:
@@ -277,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2, sort_keys=True))
+    if args.command == "readiness" and not result.get("ready", False):
+        return 1
     return 0
 
 

@@ -203,6 +203,21 @@ class ContractTests(unittest.TestCase):
         self.assertIn("slow-trend-allocation", policy["strategyAllocationIds"])
         self.assertEqual(DEFAULT_ALLOCATION_POLICY["accountBalancePersistence"], "redacted")
 
+    def test_allocation_policy_rejects_non_finite_numeric_values(self):
+        for key, value in (
+            ("botAllocationUsd", float("nan")),
+            ("reservedUsd", float("inf")),
+            ("availableUsd", float("-inf")),
+            ("maxOrderUsd", float("nan")),
+            ("providerDemoBalanceUsd", float("inf")),
+        ):
+            with self.subTest(key=key):
+                policy = {**DEFAULT_ALLOCATION_POLICY, key: value}
+                result = validate_allocation_policy(policy)
+
+                self.assertFalse(result.ok)
+                self.assertIn("finite", " ".join(result.errors))
+
     def test_provider_metadata_and_gateway_block_all_execution(self):
         snapshot = build_provider_metadata_snapshot()
         self.assertEqual(snapshot["providerCalls"], "blocked")

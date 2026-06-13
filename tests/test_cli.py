@@ -192,6 +192,52 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["coverage"]["fixtureCount"], 2)
         self.assertEqual([item["symbol"] for item in payload["perSymbolDiagnostics"]], ["SPY", "GLD"])
 
+    def test_readiness_cli_reports_backtest_ready_without_provider_calls(self):
+        result = self.run_cli(
+            "readiness",
+            "--fixture",
+            f"SPY={FIXTURE_PATH}",
+            "--fixture",
+            f"GLD={GLD_FIXTURE_PATH}",
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+            "--provider-demo-balance-usd",
+            "1000000",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        serialized = json.dumps(payload)
+        self.assertEqual(payload["dtoVersion"], "backtest-readiness.v1")
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["readinessScope"], "offline-backtest-only")
+        self.assertEqual(payload["providerCalls"], "blocked")
+        self.assertEqual(payload["executionRoutes"], "absent")
+        self.assertEqual(payload["demoExecution"], "blocked")
+        self.assertEqual(payload["liveExecution"], "blocked")
+        self.assertEqual(payload["metadata"]["symbols"], ["GLD", "SPY"])
+        self.assertEqual([fixture["symbol"] for fixture in payload["fixtureDiagnostics"]], ["SPY", "GLD"])
+        self.assertTrue(all(gate["ok"] for gate in payload["gates"]))
+        self.assertTrue(payload["nextSafeCommands"])
+        self.assertNotIn("1000000", serialized)
+
+    def test_readiness_cli_returns_redacted_not_ready_report_for_missing_fixture(self):
+        result = self.run_cli(
+            "readiness",
+            "--fixture",
+            "SPY=/tmp/money-maker-missing-fixture.csv",
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, "")
+        payload = json.loads(result.stdout)
+        self.assertFalse(payload["ready"])
+        self.assertEqual(payload["providerCalls"], "blocked")
+        self.assertEqual(payload["executionRoutes"], "absent")
+        self.assertEqual(payload["fixtureDiagnostics"][0]["errors"], ["offline fixture file does not exist"])
+
     def test_backtest_cli_rejects_fixture_over_row_limit(self):
         result = self.run_cli(
             "backtest",
@@ -219,6 +265,21 @@ class CliTests(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsupported strategy parameters", result.stderr)
+
+    def test_backtest_cli_rejects_non_finite_budget_inputs(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(FIXTURE_PATH),
+            "--symbol",
+            "SPY",
+            "--budget-usd",
+            "NaN",
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("budget-usd must be a finite number", result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_cli_rejects_execute_and_trade_modes(self):
         for mode in ("execute", "trade", "trading"):

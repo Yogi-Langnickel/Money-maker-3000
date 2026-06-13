@@ -4,6 +4,7 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime
+from math import isfinite
 from typing import Any
 
 from money_maker_3000.contracts import (
@@ -13,6 +14,7 @@ from money_maker_3000.contracts import (
     SIMULATION_CONFIG_CONTRACT,
     default_simulation_config_for_strategy,
     merge_simulation_config,
+    safe_positive_usd_for_output,
     safe_strategy_parameters_for_output,
     utc_iso,
 )
@@ -58,8 +60,20 @@ def stable_config_hash(config: dict[str, Any], allocation_policy: dict[str, Any]
         },
         "riskPolicy": risk_policy,
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(_json_safe(payload), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not isfinite(value):
+        return "invalid-non-finite-number"
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def build_simulation_run(
@@ -87,6 +101,10 @@ def build_simulation_run(
     safe_strategy_parameters = safe_strategy_parameters_for_output(
         effective_config["strategyId"],
         effective_config.get("strategyParameters"),
+    )
+    safe_budget_usd = safe_positive_usd_for_output(
+        effective_config.get("budgetUsd"),
+        effective_budget_policy["baseBudgetUsd"],
     )
     config_hash = stable_config_hash(effective_config, effective_allocation_policy, effective_risk_policy)
     risk_decision = evaluate_risk_gate(
@@ -136,7 +154,7 @@ def build_simulation_run(
             "strategyId": effective_config["strategyId"],
             "strategyVersion": effective_config.get("strategyVersion"),
             "selectedInstrument": deepcopy(effective_config["selectedInstrument"]),
-            "budgetUsd": effective_config["budgetUsd"],
+            "budgetUsd": safe_budget_usd,
             "allowedMarkets": list(effective_config["allowedMarkets"]),
             "allowedInstrumentClasses": list(effective_config["allowedInstrumentClasses"]),
             "cadence": deepcopy(effective_config["cadence"]),
@@ -147,7 +165,7 @@ def build_simulation_run(
         "allocation": risk_decision["allocation"],
         "budget": {
             "allocatedUsd": 0.0,
-            "remainingUsd": effective_config.get("budgetUsd", effective_budget_policy["baseBudgetUsd"]),
+            "remainingUsd": safe_budget_usd,
             "maxConfigurableBudgetUsd": effective_budget_policy["maxConfigurableBudgetUsd"],
         },
         "providerMetadata": build_provider_metadata_snapshot(),
@@ -165,7 +183,7 @@ def build_simulation_run(
             "riskDecision": "blocked",
             "reasonCode": risk_decision["vetoes"][0] if risk_decision["vetoes"] else "blocked",
             "vetoes": risk_decision["vetoes"],
-            "budgetRemainingUsd": effective_config.get("budgetUsd", effective_budget_policy["baseBudgetUsd"]),
+            "budgetRemainingUsd": safe_budget_usd,
             "dataFreshness": risk_decision["riskState"]["data_freshness"],
             "accountIdentifiers": "redacted",
             "rawProviderPayloads": "absent",

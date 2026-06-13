@@ -470,6 +470,26 @@ class RiskAndBacktestTests(unittest.TestCase):
             self.assertNotIn("apiKey", serialized)
             self.assertNotIn("api-secret-abcdef12", serialized)
 
+    def test_invalid_budget_and_allocation_numbers_are_not_echoed_in_run_output(self):
+        run = build_simulation_run(
+            strategy_id="dca-cash-reserve",
+            simulation_config={"budgetUsd": float("nan")},
+            allocation_policy=build_allocation_policy(
+                bot_allocation_usd=float("nan"),
+                reserved_usd=100.0,
+                max_order_usd=float("inf"),
+            ),
+        )
+        serialized = json.dumps(run, allow_nan=False)
+
+        self.assertIn("budget must be a positive finite USD amount", " ".join(run["configValidation"]["errors"]))
+        self.assertEqual(run["simulationConfig"]["budgetUsd"], 1000.0)
+        self.assertEqual(run["budget"]["remainingUsd"], 1000.0)
+        self.assertEqual(run["allocation"]["botAllocationUsd"], 1000.0)
+        self.assertEqual(run["allocation"]["maxOrderUsd"], 250.0)
+        self.assertNotIn("NaN", serialized)
+        self.assertNotIn("Infinity", serialized)
+
     def test_ledger_records_are_append_only_redacted_and_reportable(self):
         report = build_synthetic_backtest(include_ledger_records=True)
         record = report["ledgerRecords"][0]

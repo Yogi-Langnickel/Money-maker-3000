@@ -416,6 +416,41 @@ def _is_finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(float(value))
 
 
+def safe_positive_usd_for_output(value: Any, default: float) -> float:
+    if _is_finite_number(value) and float(value) > 0:
+        return float(value)
+    return float(default)
+
+
+def safe_non_negative_usd_for_output(value: Any, default: float) -> float:
+    if _is_finite_number(value) and float(value) >= 0:
+        return float(value)
+    return float(default)
+
+
+def safe_allocation_policy_for_output(policy: dict[str, Any] | None = None) -> dict[str, Any]:
+    source = policy if isinstance(policy, dict) else {}
+    defaults = DEFAULT_ALLOCATION_POLICY
+    strategy_allocation_ids = source.get("strategyAllocationIds")
+    if not isinstance(strategy_allocation_ids, dict):
+        strategy_allocation_ids = defaults["strategyAllocationIds"]
+    bot_allocation = safe_positive_usd_for_output(source.get("botAllocationUsd"), defaults["botAllocationUsd"])
+    reserved = safe_non_negative_usd_for_output(source.get("reservedUsd"), defaults["reservedUsd"])
+    available_default = max(bot_allocation - reserved, 0.0)
+    return {
+        "allocationId": source.get("allocationId") if isinstance(source.get("allocationId"), str) else defaults["allocationId"],
+        "strategyAllocationIds": deepcopy(strategy_allocation_ids),
+        "botAllocationUsd": bot_allocation,
+        "reservedUsd": reserved,
+        "availableUsd": safe_non_negative_usd_for_output(source.get("availableUsd"), available_default),
+        "maxOrderUsd": safe_positive_usd_for_output(source.get("maxOrderUsd"), defaults["maxOrderUsd"]),
+        "maxBotAllocationUsd": safe_positive_usd_for_output(source.get("maxBotAllocationUsd"), defaults["maxBotAllocationUsd"]),
+        "providerDemoBalanceUsd": None,
+        "providerBalanceUse": "ignored-for-budget",
+        "accountBalancePersistence": "redacted",
+    }
+
+
 def safe_strategy_parameters_for_output(strategy_id: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
     defaults = default_strategy_parameters_for_strategy(strategy_id)
     result = validate_strategy_parameters(strategy_id, parameters)
@@ -472,26 +507,26 @@ def validate_allocation_policy(policy: dict[str, Any] = DEFAULT_ALLOCATION_POLIC
     available = policy.get("availableUsd")
     max_order = policy.get("maxOrderUsd")
     provider_balance = policy.get("providerDemoBalanceUsd")
-    if not isinstance(bot_allocation, (int, float)) or bot_allocation <= 0:
-        errors.append("bot allocation must be a positive USD amount")
+    if not _is_finite_number(bot_allocation) or float(bot_allocation) <= 0:
+        errors.append("bot allocation must be a positive finite USD amount")
     elif bot_allocation > policy.get("maxBotAllocationUsd", 0):
         errors.append("bot allocation cannot exceed the maximum bot allocation")
-    if not isinstance(reserved, (int, float)) or reserved < 0:
-        errors.append("reserved allocation must be a non-negative USD amount")
-    if not isinstance(available, (int, float)) or available < 0:
-        errors.append("available allocation must be a non-negative USD amount")
+    if not _is_finite_number(reserved) or float(reserved) < 0:
+        errors.append("reserved allocation must be a non-negative finite USD amount")
+    if not _is_finite_number(available) or float(available) < 0:
+        errors.append("available allocation must be a non-negative finite USD amount")
     if isinstance(bot_allocation, (int, float)) and isinstance(reserved, (int, float)):
         expected_available = round(float(bot_allocation) - float(reserved), 10)
         if isinstance(available, (int, float)) and round(float(available), 10) != expected_available:
             errors.append("available allocation must equal bot allocation minus reserved allocation")
-    if not isinstance(max_order, (int, float)) or max_order <= 0:
-        errors.append("max order must be a positive USD amount")
+    if not _is_finite_number(max_order) or float(max_order) <= 0:
+        errors.append("max order must be a positive finite USD amount")
     elif isinstance(available, (int, float)) and max_order > available:
         errors.append("max order cannot exceed available allocation")
     if not isinstance(policy.get("strategyAllocationIds"), dict) or not policy["strategyAllocationIds"]:
         errors.append("strategy allocation ids are required")
-    if provider_balance is not None and (not isinstance(provider_balance, (int, float)) or provider_balance <= 0):
-        errors.append("provider demo balance must be positive when supplied")
+    if provider_balance is not None and (not _is_finite_number(provider_balance) or float(provider_balance) <= 0):
+        errors.append("provider demo balance must be positive and finite when supplied")
     if policy.get("providerBalanceUse") != "ignored-for-budget":
         errors.append("provider account balance must not drive bot budget")
     if policy.get("accountBalancePersistence") != "redacted":
@@ -560,8 +595,8 @@ def validate_simulation_config(
             errors.append("selected instrument class is blocked")
 
     budget = effective_config.get("budgetUsd")
-    if not isinstance(budget, (int, float)) or budget <= 0:
-        errors.append("budget must be a positive USD amount")
+    if not _is_finite_number(budget) or float(budget) <= 0:
+        errors.append("budget must be a positive finite USD amount")
     else:
         if budget not in budget_policy["selectableBudgetsUsd"]:
             errors.append("budget must be one of the selectable budget options")

@@ -9,6 +9,7 @@ from money_maker_3000.contracts import (
     DEFAULT_BUDGET_POLICY,
     DEFAULT_SCHEDULE_POLICY,
     ValidationResult,
+    safe_allocation_policy_for_output,
     validate_allocation_policy,
     validate_budget_policy,
     validate_schedule_policy,
@@ -209,6 +210,7 @@ def evaluate_risk_gate(
 
     vetoes.extend(("provider-not-connected", "execution-route-absent"))
     provider_metadata = build_provider_metadata_snapshot()
+    safe_allocation = safe_allocation_policy_for_output(allocation)
     return {
         "riskPolicyVersion": RISK_POLICY_VERSION,
         "decision": "blocked",
@@ -217,12 +219,12 @@ def evaluate_risk_gate(
         "diagnostics": diagnostics,
         "validations": validations,
         "allocation": {
-            "allocationId": allocation.get("allocationId"),
-            "strategyAllocationId": allocation.get("strategyAllocationIds", {}).get(simulation_config.get("strategyId")),
-            "botAllocationUsd": allocation.get("botAllocationUsd"),
-            "reservedUsd": allocation.get("reservedUsd"),
-            "availableUsd": allocation.get("availableUsd"),
-            "maxOrderUsd": allocation.get("maxOrderUsd"),
+            "allocationId": safe_allocation["allocationId"],
+            "strategyAllocationId": safe_allocation["strategyAllocationIds"].get(simulation_config.get("strategyId")),
+            "botAllocationUsd": safe_allocation["botAllocationUsd"],
+            "reservedUsd": safe_allocation["reservedUsd"],
+            "availableUsd": safe_allocation["availableUsd"],
+            "maxOrderUsd": safe_allocation["maxOrderUsd"],
             "providerDemoBalance": "redacted",
             "providerBalanceUse": "ignored-for-budget",
         },

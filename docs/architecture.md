@@ -19,6 +19,8 @@ The runtime package lives under `src/money_maker_3000/`.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
   accumulator plus selected-period market diagnostics for dashboard charting.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
+- `readiness.py`: offline backtest-readiness gates for strategy registry,
+  allocation policy, run-mode policy, provider boundary, and fixture coverage.
 - `ledger.py`: redacted append/read/report JSONL audit records with
   exclusive writer locking around duplicate checks and append.
 - `reconciliation.py`: simulation-only reconciliation records that redact
@@ -127,6 +129,13 @@ Backtest DTOs include deterministic metadata:
 - Python version
 - explicit `startedAt`
 - `periodDiagnostics` for `24h`, `1w`, `1m`, `1y`, `5y`, and `max`
+
+The `readiness` CLI command emits `backtest-readiness.v1` before operator-run
+fixture diagnostics. It returns `ready: true` only when strategy registry,
+allocation policy, run-mode policy, provider boundary, and offline fixtures are
+safe for diagnostics. The readiness scope is explicitly
+`offline-backtest-only`; provider calls remain blocked, execution routes remain
+absent, demo/live execution remains blocked, and account data remains absent.
 
 Backtest output is diagnostics only: coverage, veto counts, config errors,
 cadence/risk gate behavior, and fixture source/date coverage. It must not

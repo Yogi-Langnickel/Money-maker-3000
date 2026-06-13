@@ -10,6 +10,22 @@ redacted or absent.
 
 ## Run
 
+Backtest readiness gate:
+
+```sh
+PYTHONPATH=src python3.13 -m money_maker_3000.cli readiness \
+  --fixture SPY=tests/fixtures/market_history/spy-daily.csv \
+  --fixture GLD=tests/fixtures/market_history/gld-daily.csv \
+  --started-at 2026-05-15T00:00:00Z
+```
+
+The readiness report emits `backtest-readiness.v1` with `ready: true` only
+when strategy registry validation, allocation policy, run-mode policy, provider
+boundary, and offline fixtures all pass. It remains offline-backtest-only:
+provider calls are blocked, execution routes are absent, demo/live execution is
+blocked, and account data is absent. If a fixture gate fails, the command still
+prints a redacted JSON report and exits non-zero.
+
 Synthetic diagnostics:
 
 ```sh
@@ -99,6 +115,9 @@ PYTHONPATH=src python3.13 -m unittest discover tests
   instrument rows without provider calls or account data.
 - Historical fixture reports fail fast above `maxFixtureRows` instead of
   materializing unbounded period-diagnostics input.
+- Backtest readiness reports verify the offline fixtures and safety posture
+  before running diagnostics, and return suggested safe backtest commands for
+  fixtures that passed readiness.
 - Backtest output is diagnostics only: coverage, veto counts, config errors,
   cadence/risk gate behavior, fixture source/date coverage, deterministic
   SHA-256 input metadata, parser version, Python version, and explicit

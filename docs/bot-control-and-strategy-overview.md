@@ -18,6 +18,7 @@ and safe controls, but it must not execute strategy code or place orders.
 | Risk gate | `risk.py` | Fail-closed before any candidate intent can become an order intent. |
 | Provider state | Metadata snapshot | Provider calls, credentials, account data, order previews, demo execution, and live execution are unavailable. |
 | Audit | Local redacted JSONL ledger helpers | Synthetic/redacted diagnostics only; no account-linked provider data; duplicate checks and appends are single-writer locked. |
+| Backtest readiness | `readiness.py` / CLI | `backtest-readiness.v1` verifies registry, allocation, run modes, provider boundary, and offline fixtures before diagnostics. |
 | Dashboard controls | Future worker DTO consumer | Disabled until worker API, auth, CSRF, rate limits, and review gates exist. |
 
 ## Required Risk Gates
@@ -50,6 +51,11 @@ Backtest reports include `strategy-intent-diagnostics.v1` for deterministic
 candidate-order context, but the intent remains `skip`, provider calls stay
 blocked, execution routes stay absent, and output carries no profitability
 claim.
+
+The `readiness` command is the operator gate before offline fixture diagnostics.
+It reports only offline-backtest readiness and suggests safe `backtest`
+commands for passing fixtures. It must not be interpreted as demo/live trading
+approval.
 
 ## Future Strategy Candidates
 
