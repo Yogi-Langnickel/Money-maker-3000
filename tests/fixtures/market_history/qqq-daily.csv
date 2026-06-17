@@ -1,0 +1,4 @@
+symbol,date,open,high,low,close,volume,source
+QQQ,2026-05-11,450.20,453.10,449.80,452.40,42100000,public-test-fixture
+QQQ,2026-05-12,452.70,455.60,451.90,454.80,39800000,public-test-fixture
+QQQ,2026-05-13,454.10,456.30,452.50,453.60,43600000,public-test-fixture

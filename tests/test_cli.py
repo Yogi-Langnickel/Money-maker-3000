@@ -7,6 +7,7 @@ from pathlib import Path
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
+QQQ_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "qqq-daily.csv"
 
 
 class CliTests(unittest.TestCase):
@@ -148,6 +149,7 @@ class CliTests(unittest.TestCase):
                         "fixtures": [
                             {"symbol": "SPY", "path": str(FIXTURE_PATH)},
                             {"symbol": "GLD", "path": str(GLD_FIXTURE_PATH)},
+                            {"symbol": "QQQ", "path": str(QQQ_FIXTURE_PATH)},
                         ]
                     }
                 ),
@@ -169,11 +171,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "offline-fixture-batch-diagnostics")
         self.assertEqual(payload["providerCalls"], "blocked")
         self.assertEqual(payload["executionRoutes"], "absent")
-        self.assertEqual(payload["coverage"]["fixtureCount"], 2)
-        self.assertEqual(payload["coverage"]["totalRows"], 6)
-        self.assertEqual(payload["metadata"]["symbols"], ["GLD", "SPY"])
+        self.assertEqual(payload["coverage"]["fixtureCount"], 3)
+        self.assertEqual(payload["coverage"]["totalRows"], 9)
+        self.assertEqual(payload["metadata"]["symbols"], ["GLD", "QQQ", "SPY"])
         self.assertEqual(payload["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
         self.assertEqual(payload["perSymbolDiagnostics"][1]["coverage"]["rowCount"], 3)
+        self.assertEqual(payload["perSymbolDiagnostics"][2]["symbol"], "QQQ")
         self.assertNotIn("1000000", serialized)
 
     def test_fixture_batch_cli_accepts_repeated_fixture_entries(self):
@@ -183,14 +186,16 @@ class CliTests(unittest.TestCase):
             f"SPY={FIXTURE_PATH}",
             "--fixture",
             f"GLD={GLD_FIXTURE_PATH}",
+            "--fixture",
+            f"QQQ={QQQ_FIXTURE_PATH}",
             "--started-at",
             "2026-05-15T00:00:00Z",
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         payload = json.loads(result.stdout)
-        self.assertEqual(payload["coverage"]["fixtureCount"], 2)
-        self.assertEqual([item["symbol"] for item in payload["perSymbolDiagnostics"]], ["SPY", "GLD"])
+        self.assertEqual(payload["coverage"]["fixtureCount"], 3)
+        self.assertEqual([item["symbol"] for item in payload["perSymbolDiagnostics"]], ["SPY", "GLD", "QQQ"])
 
     def test_readiness_cli_reports_backtest_ready_without_provider_calls(self):
         result = self.run_cli(
@@ -199,6 +204,8 @@ class CliTests(unittest.TestCase):
             f"SPY={FIXTURE_PATH}",
             "--fixture",
             f"GLD={GLD_FIXTURE_PATH}",
+            "--fixture",
+            f"QQQ={QQQ_FIXTURE_PATH}",
             "--started-at",
             "2026-05-15T00:00:00Z",
             "--provider-demo-balance-usd",
@@ -215,8 +222,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["executionRoutes"], "absent")
         self.assertEqual(payload["demoExecution"], "blocked")
         self.assertEqual(payload["liveExecution"], "blocked")
-        self.assertEqual(payload["metadata"]["symbols"], ["GLD", "SPY"])
-        self.assertEqual([fixture["symbol"] for fixture in payload["fixtureDiagnostics"]], ["SPY", "GLD"])
+        self.assertEqual(payload["metadata"]["symbols"], ["GLD", "QQQ", "SPY"])
+        self.assertEqual([fixture["symbol"] for fixture in payload["fixtureDiagnostics"]], ["SPY", "GLD", "QQQ"])
         self.assertTrue(all(gate["ok"] for gate in payload["gates"]))
         self.assertTrue(payload["nextSafeCommands"])
         self.assertNotIn("1000000", serialized)

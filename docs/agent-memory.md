@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-06-13
+Updated: 2026-06-17
 
 ## Current Truth
 
@@ -40,7 +40,7 @@ Updated: 2026-06-13
   state they are not evaluated against real PnL.
 - `market_history.py` provides stdlib streaming CSV/date validation and
   single-pass history summaries.
-- Offline historical fixture coverage now includes `SPY` and `GLD` daily
+- Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ` daily
   public-test fixtures. Historical backtest reports include
   `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market
   change diagnostics for dashboard portfolio charting. The DTO explicitly
@@ -96,13 +96,13 @@ Updated: 2026-06-13
 - `PYTHONPYCACHEPREFIX=.pycache python3.13 -m compileall src tests`: compile the
   Python package and tests.
 - `PYTHONPATH=src python3.13 -m unittest discover tests`: run the unittest suite.
-- `PYTHONPATH=src python3.13 -m money_maker_3000.cli readiness --fixture SPY=tests/fixtures/market_history/spy-daily.csv --fixture GLD=tests/fixtures/market_history/gld-daily.csv --started-at 2026-05-15T00:00:00Z`:
+- `PYTHONPATH=src python3.13 -m money_maker_3000.cli readiness --fixture SPY=tests/fixtures/market_history/spy-daily.csv --fixture GLD=tests/fixtures/market_history/gld-daily.csv --fixture QQQ=tests/fixtures/market_history/qqq-daily.csv --started-at 2026-05-15T00:00:00Z`:
   run the offline backtest readiness gate; current committed fixtures report
   `ready: true` with provider calls blocked and execution absent.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest --history-csv tests/fixtures/market_history/spy-daily.csv --started-at 2026-05-15T00:00:00Z`:
   run the offline fixture diagnostics DTO, including selected-period market
   change diagnostics.
-- `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch --fixture SPY=tests/fixtures/market_history/spy-daily.csv --fixture GLD=tests/fixtures/market_history/gld-daily.csv --started-at 2026-05-15T00:00:00Z`:
+- `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch --fixture SPY=tests/fixtures/market_history/spy-daily.csv --fixture GLD=tests/fixtures/market_history/gld-daily.csv --fixture QQQ=tests/fixtures/market_history/qqq-daily.csv --started-at 2026-05-15T00:00:00Z`:
   run batch offline fixture diagnostics with per-symbol metadata and period
   diagnostics.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report .local/simulation-ledger.jsonl`:

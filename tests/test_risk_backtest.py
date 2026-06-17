@@ -38,8 +38,10 @@ from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, evaluate_
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
+QQQ_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "qqq-daily.csv"
 SELECTED_SPY = {"symbol": "SPY", "market": "US_EQUITIES", "instrumentClass": "ETF"}
 SELECTED_GLD = {"symbol": "GLD", "market": "US_EQUITIES", "instrumentClass": "ETF"}
+SELECTED_QQQ = {"symbol": "QQQ", "market": "US_EQUITIES", "instrumentClass": "ETF"}
 
 
 def _append_duplicate_ledger_worker(ledger_path: str, record: dict, queue: multiprocessing.Queue) -> None:
@@ -259,11 +261,35 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["periodDiagnostics"]["symbol"], "GLD")
         self.assertEqual(report["periodDiagnostics"]["providerCalls"], "blocked")
 
+    def test_qqq_fixture_expands_offline_instrument_coverage(self):
+        with QQQ_FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            report = build_historical_fixture_backtest(
+                bars=iter_market_history_bars(source, selected_symbol="QQQ"),
+                selected_instrument=SELECTED_QQQ,
+                started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                input_sha256=sha256_file(QQQ_FIXTURE_PATH),
+            )
+        serialized = json.dumps(report)
+
+        self.assertEqual(report["metadata"]["dataSource"], "public-test-fixture")
+        self.assertEqual(report["metadata"]["rowCount"], 3)
+        self.assertEqual(report["metadata"]["firstDate"], "2026-05-11")
+        self.assertEqual(report["metadata"]["lastDate"], "2026-05-13")
+        self.assertEqual(report["metadata"]["maxFixtureRows"], 10000)
+        self.assertEqual(report["metadata"]["inputSha256"], sha256_file(QQQ_FIXTURE_PATH))
+        self.assertEqual(report["periodDiagnostics"]["symbol"], "QQQ")
+        self.assertEqual(report["periodDiagnostics"]["providerCalls"], "blocked")
+        self.assertEqual(report["periodDiagnostics"]["accountData"], "absent")
+        self.assertEqual(report["periodDiagnostics"]["execution"], "blocked")
+        for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
+            self.assertNotIn(forbidden, serialized)
+
     def test_offline_fixture_batch_diagnostics_aggregate_per_symbol_reports(self):
         reports = []
         for symbol, fixture_path, selected in (
             ("SPY", FIXTURE_PATH, SELECTED_SPY),
             ("GLD", GLD_FIXTURE_PATH, SELECTED_GLD),
+            ("QQQ", QQQ_FIXTURE_PATH, SELECTED_QQQ),
         ):
             with fixture_path.open("r", encoding="utf-8", newline="") as source:
                 reports.append(
@@ -285,12 +311,12 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(batch["mode"], "offline-fixture-batch-diagnostics")
         self.assertEqual(batch["providerCalls"], "blocked")
         self.assertEqual(batch["executionRoutes"], "absent")
-        self.assertEqual(batch["coverage"]["fixtureCount"], 2)
-        self.assertEqual(batch["coverage"]["totalRows"], 6)
-        self.assertEqual(batch["summary"]["eventCount"], 6)
-        self.assertEqual(batch["summary"]["blockedCount"], 6)
-        self.assertEqual(batch["metadata"]["symbols"], ["GLD", "SPY"])
-        self.assertEqual([item["symbol"] for item in batch["perSymbolDiagnostics"]], ["SPY", "GLD"])
+        self.assertEqual(batch["coverage"]["fixtureCount"], 3)
+        self.assertEqual(batch["coverage"]["totalRows"], 9)
+        self.assertEqual(batch["summary"]["eventCount"], 9)
+        self.assertEqual(batch["summary"]["blockedCount"], 9)
+        self.assertEqual(batch["metadata"]["symbols"], ["GLD", "QQQ", "SPY"])
+        self.assertEqual([item["symbol"] for item in batch["perSymbolDiagnostics"]], ["SPY", "GLD", "QQQ"])
         self.assertEqual(batch["perSymbolDiagnostics"][0]["inputSha256"], sha256_file(FIXTURE_PATH))
         self.assertEqual(batch["perSymbolDiagnostics"][0]["parserVersion"], "0.1.0-streaming-stdlib")
         self.assertEqual(batch["perSymbolDiagnostics"][0]["coverage"]["rowCount"], 3)
