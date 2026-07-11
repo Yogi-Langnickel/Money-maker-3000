@@ -555,7 +555,7 @@ def validate_simulation_config(
 ) -> ValidationResult:
     from money_maker_3000.strategies import STRATEGY_REGISTRY
 
-    effective_config = config or DEFAULT_SIMULATION_CONFIG
+    effective_config = DEFAULT_SIMULATION_CONFIG if config is None else config
     registry = strategy_registry or STRATEGY_REGISTRY
     budget_policy = budget_policy or DEFAULT_BUDGET_POLICY
     allocation_policy = allocation_policy or DEFAULT_ALLOCATION_POLICY

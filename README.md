@@ -86,6 +86,9 @@ PYTHONPYCACHEPREFIX=.pycache python3.13 -m compileall src tests
 PYTHONPATH=src python3.13 -m unittest discover tests
 ```
 
+GitHub Actions runs the same compile and standard-library test gates on Python
+3.11, 3.12, and 3.13 for pull requests and pushes to `develop`.
+
 ## Current Scope
 
 - Python package under `src/money_maker_3000/`.

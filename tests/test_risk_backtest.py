@@ -13,7 +13,11 @@ from money_maker_3000.backtest import (
     iter_decision_events,
     summarize_decision_events,
 )
-from money_maker_3000.contracts import build_allocation_policy, default_simulation_config_for_strategy
+from money_maker_3000.contracts import (
+    DEFAULT_ALLOCATION_POLICY,
+    build_allocation_policy,
+    default_simulation_config_for_strategy,
+)
 from money_maker_3000.engine import build_simulation_run
 from money_maker_3000.ledger import (
     append_ledger_record,
@@ -66,6 +70,111 @@ class RiskAndBacktestTests(unittest.TestCase):
         joined = " ".join(invalid.errors)
         self.assertIn("daily loss stop must be <= weekly loss stop <= bot allocation", joined)
         self.assertIn("leverage must remain 1", joined)
+
+    def test_risk_policy_malformed_values_fail_closed_without_exceptions(self):
+        malformed_cases = (
+            ("maxOrderUsd", "bad", "risk max order must be a positive finite number"),
+            ("maxOrderUsd", float("nan"), "risk max order must be a positive finite number"),
+            ("perInstrumentExposureCapUsd", float("inf"), "per-instrument exposure cap"),
+            ("cashReserveFloorUsd", -1, "cash reserve floor"),
+            ("maxOpenPositions", True, "max open positions must be a positive integer"),
+            ("maxDataAgeDays", 0, "max data age days must be a positive integer"),
+            ("blockedInstrumentClasses", "CFD,OPTION", "blocked instrument classes must be a list"),
+            ("leverage", True, "leverage must remain 1"),
+        )
+
+        for field, value, expected_error in malformed_cases:
+            with self.subTest(field=field, value=value):
+                policy = {**DEFAULT_RISK_POLICY, field: value}
+                result = validate_risk_policy(policy)
+                self.assertFalse(result.ok)
+                self.assertIn(expected_error, " ".join(result.errors))
+
+                decision = evaluate_risk_gate(
+                    simulation_config=default_simulation_config_for_strategy("dca-cash-reserve"),
+                    risk_policy=policy,
+                    proposed_order_usd=100,
+                )
+                self.assertEqual(decision["decision"], "blocked")
+                self.assertIn("invalid-risk-policy", decision["vetoes"])
+
+        missing = dict(DEFAULT_RISK_POLICY)
+        missing.pop("maxOrderUsd")
+        self.assertFalse(validate_risk_policy(missing).ok)
+        self.assertFalse(validate_risk_policy("not-an-object").ok)
+
+    def test_risk_policy_cross_checks_zero_allocation_boundaries(self):
+        allocation = {
+            **DEFAULT_ALLOCATION_POLICY,
+            "reservedUsd": 0,
+            "availableUsd": DEFAULT_ALLOCATION_POLICY["botAllocationUsd"],
+        }
+
+        result = validate_risk_policy(DEFAULT_RISK_POLICY, allocation_policy=allocation)
+
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "cash reserve floor cannot exceed reserved allocation",
+            result.errors,
+        )
+
+    def test_risk_gate_malformed_allocation_order_and_state_fail_closed(self):
+        config = default_simulation_config_for_strategy("dca-cash-reserve")
+        cases = (
+            (
+                {"allocation_policy": {"botAllocationUsd": 1000}, "proposed_order_usd": 100},
+                "invalid-allocation-policy",
+            ),
+            ({"allocation_policy": {}, "proposed_order_usd": 100}, "invalid-allocation-policy"),
+            ({"budget_policy": {"baseBudgetUsd": "bad"}, "proposed_order_usd": 100}, "invalid-budget-policy"),
+            ({"schedule_policy": {"maxDecisionsPerDay": "bad"}, "proposed_order_usd": 100}, "invalid-schedule-policy"),
+            ({"proposed_order_usd": "100"}, "invalid-order-intent"),
+            ({"proposed_order_usd": float("nan")}, "invalid-order-intent"),
+            ({"risk_state": "bad", "proposed_order_usd": 100}, "invalid-risk-state"),
+            (
+                {
+                    "risk_state": RiskInputState(
+                        daily_loss_usd="bad",
+                        weekly_loss_usd=0,
+                        allocation_drawdown_usd=0,
+                    ),
+                    "proposed_order_usd": 100,
+                },
+                "invalid-risk-state",
+            ),
+            (
+                {
+                    "risk_state": RiskInputState(
+                        daily_loss_usd=float("nan"),
+                        weekly_loss_usd=0,
+                        allocation_drawdown_usd=0,
+                    ),
+                    "proposed_order_usd": 100,
+                },
+                "invalid-risk-state",
+            ),
+        )
+
+        for inputs, expected_veto in cases:
+            with self.subTest(expected_veto=expected_veto):
+                decision = evaluate_risk_gate(simulation_config=config, **inputs)
+                self.assertEqual(decision["decision"], "blocked")
+                self.assertIn(expected_veto, decision["vetoes"])
+                json.dumps(decision, allow_nan=False)
+
+        malformed_config = evaluate_risk_gate(
+            simulation_config="not-an-object",
+            proposed_order_usd=100,
+        )
+        self.assertEqual(malformed_config["decision"], "blocked")
+        self.assertIn("invalid-simulation-config", malformed_config["vetoes"])
+
+        empty_config = evaluate_risk_gate(
+            simulation_config={},
+            proposed_order_usd=100,
+        )
+        self.assertEqual(empty_config["decision"], "blocked")
+        self.assertIn("invalid-simulation-config", empty_config["vetoes"])
 
     def test_risk_engine_fails_closed_on_missing_reconciliation_and_unknown_provider(self):
         config = default_simulation_config_for_strategy("dca-cash-reserve")
@@ -209,6 +318,97 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertFalse(record["validation"]["ok"])
         self.assertEqual(record["riskInputState"]["data_freshness"], "unknown")
         self.assertIn("data freshness state is invalid", record["validation"]["problems"])
+
+    def test_reconciliation_malformed_dates_and_numbers_fail_closed(self):
+        provider_snapshot = {
+            "providerState": "known-read-only",
+            "source": "synthetic",
+            "providerCallStatus": "not-attempted",
+        }
+        invalid_date_cases = (
+            ("not-a-date", "2026-05-15"),
+            ("2026-02-30", "2026-05-15"),
+            ("2026-05-01", "invalid-start"),
+        )
+
+        for last_seen, started_at in invalid_date_cases:
+            with self.subTest(last_seen=last_seen, started_at=started_at):
+                record = build_simulation_reconciliation_record(
+                    provider_snapshot=provider_snapshot,
+                    data_last_seen_date=last_seen,
+                    started_at_date=started_at,
+                    daily_loss_usd=0,
+                    weekly_loss_usd=0,
+                    allocation_drawdown_usd=0,
+                )
+                self.assertFalse(record["validation"]["ok"])
+                self.assertEqual(record["reconciliationState"], "missing")
+                self.assertEqual(record["riskInputState"]["data_freshness"], "unknown")
+                self.assertIn(
+                    "freshness dates must use valid ISO calendar dates",
+                    record["validation"]["problems"],
+                )
+
+        malformed_number = build_simulation_reconciliation_record(
+            provider_snapshot=provider_snapshot,
+            data_freshness="fresh",
+            max_data_age_days=True,
+            daily_loss_usd=float("nan"),
+            weekly_loss_usd=float("inf"),
+            allocation_drawdown_usd=-1,
+        )
+        self.assertFalse(malformed_number["validation"]["ok"])
+        self.assertEqual(malformed_number["reconciliationState"], "missing")
+        self.assertIsNone(malformed_number["lossReconciliation"]["dailyLossUsd"])
+        self.assertIsNone(malformed_number["lossReconciliation"]["weeklyLossUsd"])
+        self.assertIsNone(malformed_number["lossReconciliation"]["allocationDrawdownUsd"])
+        self.assertNotIn("NaN", json.dumps(malformed_number))
+        self.assertNotIn("Infinity", json.dumps(malformed_number))
+
+    def test_reconciliation_malformed_allocation_and_provider_values_fail_closed(self):
+        provider_snapshot = {
+            "providerState": "known-read-only",
+            "source": "synthetic",
+            "providerCallStatus": "not-attempted",
+            "nested": {"invalidMetric": float("nan")},
+        }
+
+        for allocation_policy in ({}, "not-an-object"):
+            with self.subTest(allocation_policy=allocation_policy):
+                record = build_simulation_reconciliation_record(
+                    allocation_policy=allocation_policy,
+                    provider_snapshot=provider_snapshot,
+                    data_freshness="fresh",
+                    daily_loss_usd=0,
+                    weekly_loss_usd=0,
+                    allocation_drawdown_usd=0,
+                )
+
+                self.assertFalse(record["validation"]["ok"])
+                self.assertEqual(record["reconciliationState"], "missing")
+                self.assertEqual(
+                    record["providerSnapshot"]["nested"]["invalidMetric"],
+                    "redacted",
+                )
+                json.dumps(record, allow_nan=False)
+
+        tuple_record = build_simulation_reconciliation_record(
+            provider_snapshot={
+                **provider_snapshot,
+                "nested": ("safe", {"invalidMetric": float("-inf")}),
+            },
+            data_freshness="fresh",
+            daily_loss_usd=0,
+            weekly_loss_usd=0,
+            allocation_drawdown_usd=0,
+        )
+        self.assertFalse(tuple_record["validation"]["ok"])
+        self.assertEqual(tuple_record["reconciliationState"], "missing")
+        self.assertEqual(
+            tuple_record["providerSnapshot"]["nested"][1]["invalidMetric"],
+            "redacted",
+        )
+        json.dumps(tuple_record, allow_nan=False)
 
     def test_streaming_market_history_parser_and_single_pass_summary(self):
         with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:

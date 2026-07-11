@@ -68,6 +68,14 @@ Updated: 2026-06-17
   reserved allocation must be non-negative. Direct run DTOs sanitize invalid
   budget/allocation numbers before output while preserving config validation
   errors.
+- Risk-policy, allocation, direct risk-state/order-intent, and reconciliation
+  freshness validation must fail closed for malformed scalar or ISO-date
+  inputs; invalid values must not escape as exceptions, `NaN`, or `Infinity`
+  in DTOs. Nested JSON-compatible sequence containers, including tuples, must
+  be traversed and normalized before DTO output. This rule is transferable
+  across financial worker boundaries.
+- GitHub Actions validates Python 3.11, 3.12, and 3.13 with compileall and the
+  standard-library unittest suite.
 - Backtest reports include `strategy-intent-diagnostics.v1` candidate-order
   context only; intent remains skipped, provider calls are blocked, execution
   routes are absent, account data is absent, and no profitability claim is made.

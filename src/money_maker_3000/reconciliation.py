@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+from math import isfinite
 from typing import Any
 
-from money_maker_3000.contracts import DEFAULT_ALLOCATION_POLICY, utc_iso, validate_allocation_policy
+from money_maker_3000.contracts import (
+    DEFAULT_ALLOCATION_POLICY,
+    ValidationResult,
+    safe_allocation_policy_for_output,
+    utc_iso,
+    validate_allocation_policy,
+)
 from money_maker_3000.ledger import ABSENT, REDACTED, redact_mapping
 from money_maker_3000.risk import RiskInputState, assess_data_freshness
 
@@ -14,11 +21,45 @@ SAFE_FRESHNESS_STATES = ("fresh", "stale", "missing", "unknown", "future-data")
 
 
 def _non_negative_number(value: Any) -> bool:
-    return not isinstance(value, bool) and isinstance(value, (int, float)) and value >= 0
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and isfinite(value)
+        and value >= 0
+    )
 
 
 def _non_negative_int(value: Any) -> bool:
     return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+
+def _validate_allocation_policy_fail_closed(policy: Any) -> ValidationResult:
+    if not isinstance(policy, dict):
+        return ValidationResult(ok=False, errors=("allocation policy must be an object",))
+    try:
+        return validate_allocation_policy(policy)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return ValidationResult(ok=False, errors=("allocation policy contains invalid values",))
+
+
+def _sanitize_non_finite_values(value: Any) -> tuple[Any, bool]:
+    if isinstance(value, float) and not isfinite(value):
+        return REDACTED, False
+    if isinstance(value, (list, tuple)):
+        sanitized_items = [_sanitize_non_finite_values(item) for item in value]
+        return [item for item, _ in sanitized_items], all(valid for _, valid in sanitized_items)
+    if isinstance(value, dict):
+        sanitized_items = {
+            key: _sanitize_non_finite_values(item)
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
+        return (
+            {key: item for key, (item, _) in sanitized_items.items()},
+            len(sanitized_items) == len(value)
+            and all(valid for _, valid in sanitized_items.values()),
+        )
+    return value, True
 
 
 def _freshness_from_inputs(
@@ -30,15 +71,19 @@ def _freshness_from_inputs(
     problems: list[str],
 ) -> str:
     if data_last_seen_date and started_at_date:
-        derived = assess_data_freshness(
-            last_date=data_last_seen_date,
-            started_at_date=started_at_date,
-            max_age_days=max_age_days,
-        )
+        try:
+            derived = assess_data_freshness(
+                last_date=data_last_seen_date,
+                started_at_date=started_at_date,
+                max_age_days=max_age_days,
+            )
+        except (TypeError, ValueError):
+            problems.append("freshness dates must use valid ISO calendar dates")
+            return "unknown"
         if data_freshness and data_freshness != derived:
             problems.append("data freshness conflicts with provided dates")
         return derived
-    if data_freshness:
+    if data_freshness is not None:
         if data_freshness not in SAFE_FRESHNESS_STATES:
             problems.append("data freshness state is invalid")
             return "unknown"
@@ -76,36 +121,44 @@ def build_simulation_reconciliation_record(
     instrument_exposure_usd: float = 0.0,
     open_positions: int = 0,
 ) -> dict[str, Any]:
-    allocation = allocation_policy or DEFAULT_ALLOCATION_POLICY
+    allocation = DEFAULT_ALLOCATION_POLICY if allocation_policy is None else allocation_policy
     problems: list[str] = []
-    allocation_validation = validate_allocation_policy(allocation)
+    allocation_validation = _validate_allocation_policy_fail_closed(allocation)
     problems.extend(allocation_validation.errors)
+    effective_allocation = allocation if allocation_validation.ok else DEFAULT_ALLOCATION_POLICY
+
+    parsed_max_data_age_days = max_data_age_days
+    if not _non_negative_int(max_data_age_days):
+        problems.append("max data age days must be a non-negative integer")
+        parsed_max_data_age_days = 7
 
     provider_state = _provider_state(provider_snapshot, problems)
     freshness = _freshness_from_inputs(
         data_freshness=data_freshness,
         data_last_seen_date=data_last_seen_date,
         started_at_date=started_at_date,
-        max_age_days=max_data_age_days,
+        max_age_days=parsed_max_data_age_days,
         problems=problems,
     )
 
-    for label, value in (
-        ("daily loss", daily_loss_usd),
-        ("weekly loss", weekly_loss_usd),
-        ("allocation drawdown", allocation_drawdown_usd),
-    ):
+    loss_inputs = {
+        "dailyLossUsd": ("daily loss", daily_loss_usd),
+        "weeklyLossUsd": ("weekly loss", weekly_loss_usd),
+        "allocationDrawdownUsd": ("allocation drawdown", allocation_drawdown_usd),
+    }
+    safe_loss_values: dict[str, float | int | None] = {}
+    for field, (label, value) in loss_inputs.items():
         if value is not None and not _non_negative_number(value):
             problems.append(f"{label} must be a non-negative USD amount")
+            safe_loss_values[field] = None
+        else:
+            safe_loss_values[field] = value
     if not _non_negative_number(instrument_exposure_usd):
         problems.append("instrument exposure must be a non-negative USD amount")
     if not _non_negative_int(open_positions):
         problems.append("open positions must be a non-negative integer")
 
-    has_loss_context = all(
-        value is not None
-        for value in (daily_loss_usd, weekly_loss_usd, allocation_drawdown_usd)
-    )
+    has_loss_context = all(value is not None for value in safe_loss_values.values())
     reconciliation_state = "available" if not problems and has_loss_context else "missing"
     if not has_loss_context:
         problems.append("loss reconciliation metrics are required")
@@ -118,13 +171,26 @@ def build_simulation_reconciliation_record(
         provider_state=provider_state,
         reconciliation_state=reconciliation_state,
         data_freshness=freshness,
-        daily_loss_usd=daily_loss_usd,
-        weekly_loss_usd=weekly_loss_usd,
-        allocation_drawdown_usd=allocation_drawdown_usd,
+        daily_loss_usd=safe_loss_values["dailyLossUsd"],
+        weekly_loss_usd=safe_loss_values["weeklyLossUsd"],
+        allocation_drawdown_usd=safe_loss_values["allocationDrawdownUsd"],
         instrument_exposure_usd=parsed_instrument_exposure_usd,
         open_positions=parsed_open_positions,
     )
-    safe_provider_snapshot = provider_snapshot if isinstance(provider_snapshot, dict) else {}
+    raw_provider_snapshot = provider_snapshot if isinstance(provider_snapshot, dict) else {}
+    safe_provider_snapshot, provider_snapshot_values_valid = _sanitize_non_finite_values(
+        raw_provider_snapshot
+    )
+    if not provider_snapshot_values_valid:
+        problems.append("provider snapshot must not contain non-finite numbers")
+        reconciliation_state = "missing"
+        risk_state = RiskInputState(
+            **{
+                **risk_state.to_dict(),
+                "reconciliation_state": reconciliation_state,
+            }
+        )
+    safe_allocation = safe_allocation_policy_for_output(effective_allocation)
 
     return {
         "reconciliationVersion": RECONCILIATION_VERSION,
@@ -137,19 +203,17 @@ def build_simulation_reconciliation_record(
         "reconciliationState": reconciliation_state,
         "observedAt": utc_iso(observed_at) if observed_at else utc_iso(),
         "allocation": {
-            "allocationId": allocation.get("allocationId"),
-            "botAllocationUsd": allocation.get("botAllocationUsd"),
-            "reservedUsd": allocation.get("reservedUsd"),
-            "availableUsd": allocation.get("availableUsd"),
-            "maxOrderUsd": allocation.get("maxOrderUsd"),
+            "allocationId": safe_allocation["allocationId"],
+            "botAllocationUsd": safe_allocation["botAllocationUsd"],
+            "reservedUsd": safe_allocation["reservedUsd"],
+            "availableUsd": safe_allocation["availableUsd"],
+            "maxOrderUsd": safe_allocation["maxOrderUsd"],
             "providerDemoBalance": REDACTED,
             "providerBalanceUse": "ignored-for-budget",
         },
         "providerSnapshot": redact_mapping(safe_provider_snapshot),
         "lossReconciliation": {
-            "dailyLossUsd": daily_loss_usd,
-            "weeklyLossUsd": weekly_loss_usd,
-            "allocationDrawdownUsd": allocation_drawdown_usd,
+            **safe_loss_values,
             "evaluation": "simulation-only-not-real-pnl",
         },
         "exposure": {
