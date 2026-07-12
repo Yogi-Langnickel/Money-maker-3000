@@ -15,6 +15,8 @@ The runtime package lives under `src/money_maker_3000/`.
   validators, including per-strategy allowlisted parameter schemas.
 - `strategies.py`: predefined registry, parameter-schema metadata, and registry
   validator.
+- `contract_manifest.py`: canonical redacted dashboard manifest generation and
+  drift validation from the Python contract source.
 - `risk.py`: pure fail-closed risk gate.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
   accumulator plus selected-period market diagnostics for dashboard charting.
@@ -32,6 +34,10 @@ The runtime package lives under `src/money_maker_3000/`.
 - `providers.py`: metadata-only provider boundary and disabled execution
   gateway contract.
 - `cli.py`: `backtest` and `ledger-report` commands.
+
+The committed `contracts/dashboard-simulation-contract.json` artifact is the
+only cross-repository dashboard contract source. Consumers pin the producer
+commit and artifact hash; they do not manually recreate Python constants.
 
 There is no Node runtime requirement.
 
