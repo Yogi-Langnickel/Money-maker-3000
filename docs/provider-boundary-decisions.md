@@ -168,7 +168,10 @@ Order preview recommendation:
 The first provider-adjacent slice is offline fixture data, not live eToro fetch
 code.
 
-Current fixture coverage includes `SPY` and `GLD` daily public-test CSVs. The
+Current fixture coverage includes `SPY`, `GLD`, and `QQQ` daily public-test
+CSVs, checksum-pinned synthetic volatility scenario windows, and a
+checksum-pinned synthetic `VAS` AU ETF instrument-contract window. None of the
+synthetic fixtures may be represented as observed market data. The
 historical fixture backtest report includes period diagnostics for `24h`, `1w`,
 `1m`, `1y`, `5y`, and `max` so the eToro Dashboard can render instrument-row
 market context without provider calls or account data.

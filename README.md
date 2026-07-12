@@ -73,6 +73,9 @@ blocked, account data absent, and execution routes absent.
 Volatility windows distinguish no-trigger, active-decline trigger, and
 recovered-after-decline observations using only the bounded offline close
 history; none of those states is a recommendation.
+Checksum-pinned synthetic fixtures cover those three default states plus an AU
+ETF instrument contract. They are offline contract evidence only and must not
+be represented as observed market data or performance evidence.
 Fixture-batch output retains these per-symbol states and emits only a state
 histogram in its summary. Readiness output carries the same redacted boundary
 fields without raw metric payloads.
@@ -152,6 +155,8 @@ GitHub Actions runs the same compile and standard-library test gates on Python
 - Offline market-history diagnostics now emit selected-period context for
   `24h`, `1w`, `1m`, `1y`, `5y`, and `max`, suitable for dashboard
   instrument rows without provider calls or account data.
+- Synthetic, checksum-pinned fixtures prove all default volatility-band states
+  and the `AU_EQUITIES`/ETF instrument path without provider access.
 - Historical fixture reports fail fast above `maxFixtureRows` instead of
   materializing unbounded period-diagnostics input.
 - Backtest readiness reports verify the offline fixtures and safety posture

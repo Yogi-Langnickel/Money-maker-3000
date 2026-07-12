@@ -78,10 +78,12 @@ symbol,date,open,high,low,close,volume,source
 
 Recommended fixture coverage:
 
-- `dca-cash-reserve`: existing `SPY`, plus one AU equity or ETF fixture.
+- `dca-cash-reserve`: existing `SPY`, plus the checksum-pinned synthetic `VAS`
+  AU ETF contract fixture.
 - `threshold-rebalance`: multi-symbol batch with an equity ETF, AU ETF, and
   `GLD`-style commodity ETF/non-CFD fixture.
-- `volatility-band-accumulator`: stable, falling, and recovering daily windows.
+- `volatility-band-accumulator`: checksum-pinned synthetic stable, falling, and
+  recovering daily windows now cover all default states.
 - `slow-trend-allocation`: at least 250 daily bars for slow-window diagnostics.
 - `news-aware-watchlist`: synthetic/redacted context fixture only; no provider
   payloads, account data, or news-driven order fields.
