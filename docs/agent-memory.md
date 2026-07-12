@@ -72,6 +72,11 @@ Updated: 2026-07-13
   Missing targets, mixed windows, malformed prices, or altered provider safety
   fields fail closed. The DTO declares holdings/account data absent and keeps
   candidate intent `skip`.
+- A checksum-pinned aligned 20-bar synthetic batch now proves threshold
+  rebalance diagnostics and readiness across `SPY` as a U.S. ETF, `VAS` as an
+  AU ETF, and `GLD` as an ETF in the `COMMODITIES` market. Exact normalized
+  historical weights and drift percentages are pinned; no holdings, P/L,
+  provider data, or execution is introduced.
 - Offline fixture batch diagnostics can run multiple fixture files from a JSON
   manifest or repeated `SYMBOL=PATH` CLI entries, aggregate coverage/veto
   summaries, and emit per-symbol SHA-256/parser metadata/period diagnostics

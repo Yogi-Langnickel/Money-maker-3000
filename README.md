@@ -86,6 +86,9 @@ and an identical historical window, the batch also emits
 price change and reports historical weight drift only. It uses no portfolio
 holdings or account balance, always keeps candidate intent `skip`, and fails
 closed on incomplete or mismatched windows.
+An aligned, checksum-pinned 20-bar synthetic batch proves this path across a
+U.S. ETF, an AU ETF, and a commodity entry with per-symbol market/instrument
+metadata. The result remains relative historical-weight drift only.
 
 `--mode execute`, `--mode trade`, and `--mode trading` are rejected before any
 work runs.

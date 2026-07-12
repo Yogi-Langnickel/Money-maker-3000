@@ -9,6 +9,7 @@ from money_maker_3000.backtest import build_synthetic_backtest
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
+GLD_COMMODITY_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-commodity-synthetic-20-daily.csv"
 QQQ_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "qqq-daily.csv"
 SLOW_TREND_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-slow-trend-202-daily.csv"
 VOLATILITY_STABLE_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-volatility-stable-20-daily.csv"
@@ -408,6 +409,127 @@ class CliTests(unittest.TestCase):
             diagnostics["metrics"]["thresholdState"],
             {"historical-drift-exceeded", "within-historical-threshold"},
         )
+
+    def test_fixture_batch_cli_proves_mixed_universe_rebalance_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manifest_path = Path(temp_dir) / "mixed-universe-fixtures.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "fixtures": [
+                            {
+                                "symbol": "SPY",
+                                "path": str(VOLATILITY_STABLE_FIXTURE_PATH),
+                                "market": "US_EQUITIES",
+                                "instrumentClass": "ETF",
+                            },
+                            {
+                                "symbol": "VAS",
+                                "path": str(AU_ETF_FIXTURE_PATH),
+                                "market": "AU_EQUITIES",
+                                "instrumentClass": "ETF",
+                            },
+                            {
+                                "symbol": "GLD",
+                                "path": str(GLD_COMMODITY_FIXTURE_PATH),
+                                "market": "COMMODITIES",
+                                "instrumentClass": "ETF",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "fixture-batch",
+                "--manifest",
+                str(manifest_path),
+                "--strategy",
+                "threshold-rebalance",
+                "--strategy-params-json",
+                (
+                    '{"targetWeights":{"SPY":0.4,"VAS":0.3,"GLD":0.3},'
+                    '"rebalanceThresholdPct":1,"maxOrderUsd":250,'
+                    '"minCashReserveUsd":100,"maxOpenPositions":3}'
+                ),
+                "--started-at",
+                "2025-01-30T00:00:00Z",
+            )
+            readiness_result = self.run_cli(
+                "readiness",
+                "--manifest",
+                str(manifest_path),
+                "--strategy",
+                "threshold-rebalance",
+                "--strategy-params-json",
+                (
+                    '{"targetWeights":{"SPY":0.4,"VAS":0.3,"GLD":0.3},'
+                    '"rebalanceThresholdPct":1,"maxOrderUsd":250,'
+                    '"minCashReserveUsd":100,"maxOpenPositions":3}'
+                ),
+                "--started-at",
+                "2025-01-30T00:00:00Z",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        diagnostics = payload["rebalanceHistoryDiagnostics"]
+        serialized = json.dumps(payload).lower()
+        self.assertEqual(payload["metadata"]["symbols"], ["GLD", "SPY", "VAS"])
+        self.assertEqual(payload["coverage"]["fixtureCount"], 3)
+        self.assertEqual(payload["coverage"]["totalRows"], 60)
+        self.assertEqual(diagnostics["state"], "available")
+        self.assertEqual(diagnostics["metrics"]["thresholdState"], "historical-drift-exceeded")
+        self.assertEqual(diagnostics["metrics"]["maxAbsoluteDriftPercentagePoints"], 1.575085)
+        self.assertEqual(
+            [
+                (weight["symbol"], weight["normalizedHistoricalWeight"], weight["driftPercentagePoints"])
+                for weight in diagnostics["metrics"]["weights"]
+            ],
+            [
+                ("GLD", 0.28424915, -1.575085),
+                ("SPY", 0.40247312, 0.247312),
+                ("VAS", 0.31327774, 1.327774),
+            ],
+        )
+        self.assertTrue(
+            all(
+                weight["coverage"] == {"startDate": "2025-01-02", "endDate": "2025-01-29", "barCount": 20}
+                for weight in diagnostics["metrics"]["weights"]
+            )
+        )
+        self.assertEqual(diagnostics["candidateIntent"], "skip")
+        self.assertEqual(diagnostics["providerCalls"], "blocked")
+        self.assertEqual(diagnostics["portfolioHoldings"], "absent")
+        self.assertEqual(diagnostics["accountData"], "absent")
+        self.assertEqual(diagnostics["executionRoutes"], "absent")
+        self.assertEqual(
+            diagnostics["performanceClaims"],
+            "historical-relative-weight-drift-only-no-pnl-or-profitability-claim",
+        )
+        for forbidden in ("accountid", "positionid", "orderid", "apikey", "userkey", "winrate", "sharpe"):
+            self.assertNotIn(forbidden, serialized)
+
+        self.assertEqual(readiness_result.returncode, 0, readiness_result.stderr)
+        readiness = json.loads(readiness_result.stdout)
+        fixture_boundaries = {
+            fixture["symbol"]: (fixture["market"], fixture["instrumentClass"])
+            for fixture in readiness["fixtureDiagnostics"]
+        }
+        self.assertTrue(readiness["ready"])
+        self.assertEqual(readiness["readinessScope"], "offline-backtest-only")
+        self.assertEqual(
+            fixture_boundaries,
+            {
+                "SPY": ("US_EQUITIES", "ETF"),
+                "VAS": ("AU_EQUITIES", "ETF"),
+                "GLD": ("COMMODITIES", "ETF"),
+            },
+        )
+        self.assertEqual(readiness["providerCalls"], "blocked")
+        self.assertEqual(readiness["executionRoutes"], "absent")
+        self.assertEqual(readiness["demoExecution"], "blocked")
+        self.assertEqual(readiness["liveExecution"], "blocked")
 
     def test_readiness_cli_reports_backtest_ready_without_provider_calls(self):
         result = self.run_cli(
