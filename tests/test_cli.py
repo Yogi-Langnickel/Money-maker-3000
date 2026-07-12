@@ -11,6 +11,10 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-dail
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
 QQQ_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "qqq-daily.csv"
 SLOW_TREND_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-slow-trend-202-daily.csv"
+VOLATILITY_STABLE_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-volatility-stable-20-daily.csv"
+VOLATILITY_DECLINE_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-volatility-decline-20-daily.csv"
+VOLATILITY_RECOVERY_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-volatility-recovery-20-daily.csv"
+AU_ETF_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "vas-au-etf-synthetic-20-daily.csv"
 
 
 class CliTests(unittest.TestCase):
@@ -90,6 +94,111 @@ class CliTests(unittest.TestCase):
         self.assertEqual(diagnostics["executionRoutes"], "absent")
         for forbidden in ("accountid", "positionid", "orderid", "apikey", "userkey", "winrate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
+
+    def test_backtest_cli_proves_checksum_pinned_volatility_scenarios(self):
+        cases = (
+            (
+                VOLATILITY_STABLE_FIXTURE_PATH,
+                "no-trigger-observed",
+                "7e7aa8344d04b62a09d0f1dfb87ba218bad982ec8476e5bcd40666c0859fa56c",
+                -0.496032,
+                -0.695134,
+            ),
+            (
+                VOLATILITY_DECLINE_FIXTURE_PATH,
+                "trigger-observed",
+                "5621200eb3e8b3d0b87ea7479812c38ad1fa46aeca308ea654043bf0f76c8d5c",
+                -7.428571,
+                -7.428571,
+            ),
+            (
+                VOLATILITY_RECOVERY_FIXTURE_PATH,
+                "recovery-observed",
+                "8566f55c59ffd4f0f29c0b228422079d70dc90707345bbf922a87772ffdb076d",
+                -0.952381,
+                -10.47619,
+            ),
+        )
+
+        for (
+            fixture_path,
+            expected_state,
+            expected_sha256,
+            expected_decline,
+            expected_maximum_decline,
+        ) in cases:
+            with self.subTest(fixture=fixture_path.name):
+                result = self.run_cli(
+                    "backtest",
+                    "--history-csv",
+                    str(fixture_path),
+                    "--symbol",
+                    "SPY",
+                    "--strategy",
+                    "volatility-band-accumulator",
+                    "--market",
+                    "US_EQUITIES",
+                    "--instrument-class",
+                    "ETF",
+                    "--started-at",
+                    "2025-01-30T00:00:00Z",
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                diagnostics = payload["strategyHistoryDiagnostics"]
+                serialized = json.dumps(payload).lower()
+                self.assertEqual(payload["metadata"]["rowCount"], 20)
+                self.assertEqual(payload["metadata"]["dataSource"], "synthetic-volatility-fixture")
+                self.assertEqual(payload["metadata"]["inputSha256"], expected_sha256)
+                self.assertEqual(diagnostics["state"], expected_state)
+                self.assertEqual(diagnostics["requiredBarCount"], 20)
+                self.assertEqual(diagnostics["metrics"]["declineFromRollingPeakPct"], expected_decline)
+                self.assertEqual(diagnostics["metrics"]["maximumObservedDeclinePct"], expected_maximum_decline)
+                self.assertEqual(diagnostics["metrics"]["dropTriggerPct"], 3.0)
+                self.assertEqual(diagnostics["candidateIntent"], "skip")
+                self.assertEqual(diagnostics["providerCalls"], "blocked")
+                self.assertEqual(diagnostics["executionRoutes"], "absent")
+                self.assertEqual(diagnostics["accountData"], "absent")
+                self.assertEqual(payload["providerCalls"], "blocked")
+                self.assertEqual(payload["executionRoutes"], "absent")
+                for forbidden in ("accountid", "positionid", "orderid", "apikey", "userkey", "winrate", "sharpe"):
+                    self.assertNotIn(forbidden, serialized)
+
+    def test_backtest_cli_accepts_checksum_pinned_synthetic_au_etf_fixture(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(AU_ETF_FIXTURE_PATH),
+            "--symbol",
+            "VAS",
+            "--strategy",
+            "dca-cash-reserve",
+            "--market",
+            "AU_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--started-at",
+            "2025-01-30T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        first_scenario = payload["scenarioSummaries"][0]
+        self.assertEqual(payload["metadata"]["rowCount"], 20)
+        self.assertEqual(payload["metadata"]["dataSource"], "synthetic-au-etf-fixture")
+        self.assertEqual(
+            payload["metadata"]["inputSha256"],
+            "6e7c464580d94a33f2f14613e7301af99af7a513e82ee8a71d92c782caf82c4b",
+        )
+        self.assertEqual(
+            first_scenario["selectedInstrument"],
+            {"symbol": "VAS", "market": "AU_EQUITIES", "instrumentClass": "ETF"},
+        )
+        self.assertEqual(first_scenario["decision"], "skip")
+        self.assertEqual(first_scenario["providerCalls"], "blocked")
+        self.assertEqual(first_scenario["executionRoute"], "absent")
+        self.assertEqual(payload["accountData"], "absent")
 
     def test_backtest_cli_accepts_allowlisted_strategy_parameter_json(self):
         result = self.run_cli(
@@ -336,6 +445,40 @@ class CliTests(unittest.TestCase):
         self.assertTrue(all(gate["ok"] for gate in payload["gates"]))
         self.assertTrue(payload["nextSafeCommands"])
         self.assertNotIn("1000000", serialized)
+
+    def test_readiness_cli_accepts_synthetic_au_etf_for_offline_diagnostics_only(self):
+        result = self.run_cli(
+            "readiness",
+            "--fixture",
+            f"VAS={AU_ETF_FIXTURE_PATH}",
+            "--strategy",
+            "dca-cash-reserve",
+            "--market",
+            "AU_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--started-at",
+            "2025-01-30T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        fixture = payload["fixtureDiagnostics"][0]
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["readinessScope"], "offline-backtest-only")
+        self.assertEqual(fixture["symbol"], "VAS")
+        self.assertEqual(fixture["market"], "AU_EQUITIES")
+        self.assertEqual(fixture["instrumentClass"], "ETF")
+        self.assertEqual(
+            fixture["inputSha256"],
+            "6e7c464580d94a33f2f14613e7301af99af7a513e82ee8a71d92c782caf82c4b",
+        )
+        self.assertEqual(fixture["strategyHistoryDiagnostics"]["candidateIntent"], "skip")
+        self.assertEqual(payload["providerCalls"], "blocked")
+        self.assertEqual(payload["executionRoutes"], "absent")
+        self.assertEqual(payload["demoExecution"], "blocked")
+        self.assertEqual(payload["liveExecution"], "blocked")
+        self.assertEqual(payload["accountData"], "absent")
 
     def test_readiness_cli_returns_redacted_not_ready_report_for_missing_fixture(self):
         result = self.run_cli(

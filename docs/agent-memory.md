@@ -59,6 +59,11 @@ Updated: 2026-07-13
   synthetic and SHA-256-pinned in CLI tests. It proves the default 50/200/3
   lookback/confirmation contract end to end without observed-market or
   profitability claims.
+- Three committed 20-bar SPY volatility fixtures are explicitly synthetic and
+  SHA-256 pinned in CLI tests. They prove the default stable/no-trigger,
+  active-decline, and recovery-after-decline states. A checksum-pinned
+  synthetic 20-bar `VAS` fixture proves the `AU_EQUITIES`/ETF instrument path.
+  None is observed-market or performance evidence.
 - Fixture-batch diagnostics preserve validated per-symbol strategy-history
   observations and aggregate only a state histogram. Readiness diagnostics
   expose the state and fail-closed boundary fields without copying raw metrics.
