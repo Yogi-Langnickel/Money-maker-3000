@@ -31,8 +31,9 @@ The runtime package lives under `src/money_maker_3000/`.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
 - `readiness.py`: offline backtest-readiness gates for strategy registry,
   allocation policy, run-mode policy, provider boundary, and fixture coverage.
-- `ledger.py`: redacted append/read/report JSONL audit records with
-  exclusive writer locking around duplicate checks and append.
+- `ledger.py`: redacted append/read/report JSONL audit records with exclusive
+  writer locking around duplicate checks and append, plus fail-closed malformed
+  ledger recovery for reporting.
 - `reconciliation.py`: simulation-only reconciliation records that redact
   provider/account fields and feed the pure risk-state contract.
 - `providers.py`: metadata-only provider boundary and disabled execution
@@ -79,6 +80,14 @@ sidecar writer lock, checks existing run and correlation identities while the
 lock is held, then appends and fsyncs one compact JSON line. This keeps repeated
 or concurrent simulation worker attempts idempotent without introducing live
 provider state, account identifiers, or an external storage dependency.
+
+Reporting reads the source in bounded binary lines and does not repair or
+rewrite it. Valid v2 records are strictly validated; legacy records are
+normalized and redacted with warnings. Oversized lines, invalid UTF-8/JSON,
+non-object values, and invalid v2 records are rejected. The report contains
+only allowlisted issue codes, line numbers, severities, and counts—never raw
+malformed content. Any rejected record marks integrity `corrupted` and makes
+the CLI exit non-zero after emitting the controlled report.
 
 ## EC2 And DynamoDB Direction
 

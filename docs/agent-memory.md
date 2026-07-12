@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-06-17
+Updated: 2026-07-13
 
 ## Current Truth
 
@@ -114,6 +114,11 @@ Updated: 2026-06-17
   writer lock so duplicate identity checks and JSONL writes are one critical
   section. It rejects sensitive key names and generic scalar values that look
   like emails, provider/account/order IDs, or token-like secrets.
+- Ledger reporting recovers valid records from malformed JSONL without
+  modifying the source. Integrity metadata is structurally validated and
+  contains only allowlisted issue codes/counts with raw content absent.
+  Rejected records mark the report `corrupted`; the CLI still emits controlled
+  JSON but returns exit status 1. Clean and warning-only reports return 0.
 - `reconciliation.py` builds simulation-only reconciliation records from
   caller-supplied synthetic/read-only inputs, redacts provider/account balance
   fields, derives freshness from supplied dates when present, rejects
@@ -140,7 +145,9 @@ Updated: 2026-06-17
   run batch offline fixture diagnostics with per-symbol metadata and period
   diagnostics.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report .local/simulation-ledger.jsonl`:
-  export a redacted dashboard DTO from an existing local synthetic ledger.
+  export a redacted dashboard DTO from an existing local synthetic ledger;
+  malformed-record recovery never mutates the source and exits 1 when any
+  record is rejected.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.contract_manifest --check`:
   verify the committed dashboard contract artifact matches `contracts.py`.
 

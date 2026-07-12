@@ -53,6 +53,24 @@ REPORT_VETO_CODES = {
     "weekly-loss-stop",
 }
 REPORT_REASON_CODES = REPORT_RISK_DECISIONS | REPORT_VETO_CODES
+MAX_LEDGER_LINE_BYTES = 64 * 1024
+LEDGER_INTEGRITY_STATES = {"clean", "recovered-with-warnings", "corrupted"}
+LEDGER_INTEGRITY_ISSUE_CODES = {
+    "oversized-record",
+    "invalid-utf8",
+    "invalid-json",
+    "invalid-record-shape",
+    "invalid-audit-record",
+    "legacy-record-normalized",
+    "sensitive-record-redacted",
+}
+LEDGER_INTEGRITY_ERROR_CODES = {
+    "oversized-record",
+    "invalid-utf8",
+    "invalid-json",
+    "invalid-record-shape",
+    "invalid-audit-record",
+}
 SENSITIVE_KEY_PATTERN = re.compile(
     r"(account|api[-_]?key|auth|balance|credential|email|holding|jwt|name|oauth|order|portfolio|position|secret|statement|token|transaction|user[-_]?key)",
     re.I,
@@ -192,6 +210,159 @@ def read_ledger_records(ledger_path: str | Path) -> list[dict[str, Any]]:
     path = Path(ledger_path)
     with path.open("r", encoding="utf-8") as source:
         return [json.loads(line) for line in source if line.strip()]
+
+
+def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    nonempty_line_count = 0
+    path = Path(ledger_path)
+    with path.open("rb") as source:
+        line_number = 0
+        while raw_line := source.readline(MAX_LEDGER_LINE_BYTES + 1):
+            line_number += 1
+            if len(raw_line) > MAX_LEDGER_LINE_BYTES:
+                has_nonwhitespace = bool(raw_line.strip())
+                while not raw_line.endswith(b"\n"):
+                    raw_line = source.readline(MAX_LEDGER_LINE_BYTES + 1)
+                    if not raw_line:
+                        break
+                    has_nonwhitespace = has_nonwhitespace or bool(raw_line.strip())
+                if has_nonwhitespace:
+                    nonempty_line_count += 1
+                    issues.append(_ledger_integrity_issue(line_number, "oversized-record", "error"))
+                continue
+            if not raw_line.strip():
+                continue
+            nonempty_line_count += 1
+            try:
+                text = raw_line.decode("utf-8")
+            except UnicodeDecodeError:
+                issues.append(_ledger_integrity_issue(line_number, "invalid-utf8", "error"))
+                continue
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                issues.append(_ledger_integrity_issue(line_number, "invalid-json", "error"))
+                continue
+            if not isinstance(parsed, dict):
+                issues.append(_ledger_integrity_issue(line_number, "invalid-record-shape", "error"))
+                continue
+
+            if parsed.get("dtoVersion") == "simulation-audit-record.v2":
+                try:
+                    parsed = _validate_simulation_audit_record(parsed)
+                except (TypeError, ValueError):
+                    issues.append(_ledger_integrity_issue(line_number, "invalid-audit-record", "error"))
+                    continue
+            else:
+                issues.append(_ledger_integrity_issue(line_number, "legacy-record-normalized", "warning"))
+                if _has_unredacted_sensitive_value(parsed):
+                    issues.append(_ledger_integrity_issue(line_number, "sensitive-record-redacted", "warning"))
+                parsed = redact_mapping(parsed)
+            records.append(parsed)
+
+    error_count = len([issue for issue in issues if issue["severity"] == "error"])
+    warning_count = len(issues) - error_count
+    return {
+        "records": records,
+        "integrity": {
+            "state": "corrupted" if error_count else ("recovered-with-warnings" if warning_count else "clean"),
+            "complete": error_count == 0,
+            "nonemptyLineCount": nonempty_line_count,
+            "acceptedRecordCount": len(records),
+            "rejectedRecordCount": error_count,
+            "warningCount": warning_count,
+            "errorCount": error_count,
+            "issues": issues,
+            "sourceMutation": "not-attempted",
+        },
+    }
+
+
+def _ledger_integrity_issue(line_number: int, code: str, severity: str) -> dict[str, Any]:
+    return {
+        "lineNumber": line_number,
+        "code": code,
+        "severity": severity,
+        "rawContent": "absent",
+    }
+
+
+def _validated_ledger_integrity(integrity: dict[str, Any] | None, record_count: int) -> dict[str, Any]:
+    if integrity is None:
+        return {
+            "state": "not-assessed",
+            "complete": False,
+            "nonemptyLineCount": record_count,
+            "acceptedRecordCount": record_count,
+            "rejectedRecordCount": 0,
+            "warningCount": 0,
+            "errorCount": 0,
+            "issues": [],
+            "sourceMutation": "not-attempted",
+        }
+    expected_keys = {
+        "state",
+        "complete",
+        "nonemptyLineCount",
+        "acceptedRecordCount",
+        "rejectedRecordCount",
+        "warningCount",
+        "errorCount",
+        "issues",
+        "sourceMutation",
+    }
+    if not isinstance(integrity, dict) or set(integrity) != expected_keys:
+        raise ValueError("ledger integrity metadata is invalid")
+    count_keys = (
+        "nonemptyLineCount",
+        "acceptedRecordCount",
+        "rejectedRecordCount",
+        "warningCount",
+        "errorCount",
+    )
+    if (
+        integrity["state"] not in LEDGER_INTEGRITY_STATES
+        or not isinstance(integrity["complete"], bool)
+        or integrity["sourceMutation"] != "not-attempted"
+        or any(
+            not isinstance(integrity[key], int) or isinstance(integrity[key], bool) or integrity[key] < 0
+            for key in count_keys
+        )
+        or integrity["acceptedRecordCount"] != record_count
+        or integrity["rejectedRecordCount"] != integrity["errorCount"]
+        or integrity["nonemptyLineCount"] != record_count + integrity["rejectedRecordCount"]
+        or not isinstance(integrity["issues"], list)
+        or len(integrity["issues"]) != integrity["warningCount"] + integrity["errorCount"]
+    ):
+        raise ValueError("ledger integrity metadata is invalid")
+    issues = []
+    for issue in integrity["issues"]:
+        if (
+            not isinstance(issue, dict)
+            or set(issue) != {"lineNumber", "code", "severity", "rawContent"}
+            or not isinstance(issue["lineNumber"], int)
+            or isinstance(issue["lineNumber"], bool)
+            or issue["lineNumber"] < 1
+            or issue["code"] not in LEDGER_INTEGRITY_ISSUE_CODES
+            or issue["severity"] not in {"warning", "error"}
+            or (issue["code"] in LEDGER_INTEGRITY_ERROR_CODES) != (issue["severity"] == "error")
+            or issue["rawContent"] != "absent"
+        ):
+            raise ValueError("ledger integrity metadata is invalid")
+        issues.append(dict(issue))
+    error_count = len([issue for issue in issues if issue["severity"] == "error"])
+    warning_count = len(issues) - error_count
+    expected_state = "corrupted" if error_count else ("recovered-with-warnings" if warning_count else "clean")
+    if (
+        integrity["state"] != expected_state
+        or integrity["complete"] != (error_count == 0)
+        or integrity["errorCount"] != error_count
+        or integrity["warningCount"] != warning_count
+    ):
+        raise ValueError("ledger integrity metadata is invalid")
+    return {**integrity, "issues": issues}
 
 
 def _validate_simulation_audit_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -360,6 +531,7 @@ def build_ledger_report(
     *,
     records: list[dict[str, Any]] | None = None,
     generated_at: datetime | None = None,
+    integrity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     dto_records = [_record_dto(record) for record in (records or [])]
     decision_histogram: dict[str, int] = {}
@@ -386,6 +558,7 @@ def build_ledger_report(
         "demoExecution": "blocked",
         "liveExecution": "blocked",
         "generatedAt": utc_iso(generated_at) if generated_at else utc_iso(datetime.fromisoformat("2026-05-15T00:00:00+00:00")),
+        "integrity": _validated_ledger_integrity(integrity, len(dto_records)),
         "summary": {
             "recordCount": len(dto_records),
             "skipCount": len([record for record in dto_records if record.get("decision") == "skip"]),
@@ -410,4 +583,5 @@ def build_ledger_report(
 
 
 def export_ledger_report(ledger_path: str | Path) -> dict[str, Any]:
-    return build_ledger_report(records=read_ledger_records(ledger_path))
+    recovered = read_ledger_records_with_integrity(ledger_path)
+    return build_ledger_report(records=recovered["records"], integrity=recovered["integrity"])

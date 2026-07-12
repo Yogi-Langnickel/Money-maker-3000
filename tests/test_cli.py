@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from money_maker_3000.backtest import build_synthetic_backtest
+
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
 QQQ_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "qqq-daily.csv"
@@ -409,6 +411,43 @@ class CliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(profile_path.exists())
             self.assertIn("function calls", profile_path.read_text(encoding="utf-8"))
+
+    def test_ledger_report_cli_returns_controlled_corruption_report(self):
+        legacy_record = {
+            "ledgerVersion": 1,
+            "strategyId": "dca-cash-reserve",
+            "decision": "skip",
+            "riskResult": "blocked",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "mixed-ledger.jsonl"
+            ledger_path.write_text(json.dumps(legacy_record) + "\n{bad-json}\n", encoding="utf-8")
+            result = self.run_cli("ledger-report", str(ledger_path))
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, "")
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["integrity"]["state"], "corrupted")
+        self.assertFalse(payload["integrity"]["complete"])
+        self.assertEqual(payload["integrity"]["acceptedRecordCount"], 1)
+        self.assertEqual(payload["integrity"]["rejectedRecordCount"], 1)
+        self.assertEqual(payload["integrity"]["sourceMutation"], "not-attempted")
+        self.assertEqual(payload["providerCalls"], "blocked")
+        self.assertEqual(payload["executionRoutes"], "absent")
+
+    def test_ledger_report_cli_accepts_clean_v2_ledger(self):
+        record = build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"][0]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "clean-ledger.jsonl"
+            ledger_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            result = self.run_cli("ledger-report", str(ledger_path))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["integrity"]["state"], "clean")
+        self.assertTrue(payload["integrity"]["complete"])
+        self.assertEqual(payload["integrity"]["acceptedRecordCount"], 1)
+        self.assertEqual(payload["integrity"]["rejectedRecordCount"], 0)
 
 
 if __name__ == "__main__":
