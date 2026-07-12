@@ -55,6 +55,10 @@ Updated: 2026-06-17
 - Volatility history distinguishes stable/no-trigger, active-decline trigger,
   and recovered-after-decline observations from the bounded offline window;
   every state remains a non-recommendation with candidate intent `skip`.
+- The committed 202-bar weekday-only SPY slow-trend fixture is explicitly
+  synthetic and SHA-256-pinned in CLI tests. It proves the default 50/200/3
+  lookback/confirmation contract end to end without observed-market or
+  profitability claims.
 - Fixture-batch diagnostics preserve validated per-symbol strategy-history
   observations and aggregate only a state histogram. Readiness diagnostics
   expose the state and fail-closed boundary fields without copying raw metrics.
