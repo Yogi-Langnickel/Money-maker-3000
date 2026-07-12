@@ -58,6 +58,13 @@ def _synthetic_entry(file: str, sha256: str, symbol: str, row_count: int, source
 
 FIXTURE_PROVENANCE_ENTRIES = (
     _synthetic_entry(
+        "gld-commodity-synthetic-20-daily.csv",
+        "3ac197941224efe535716b00d2a9b9110e2fa278d32bc27c9d6b90185eefc6bd",
+        "GLD",
+        20,
+        "synthetic-commodity-fixture",
+    ),
+    _synthetic_entry(
         "gld-daily.csv",
         "23ae1e1422b894e523196f08dc683c1738aa126e6d3139d17de9a8af3a5fd5fd",
         "GLD",

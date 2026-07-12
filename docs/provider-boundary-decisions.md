@@ -172,6 +172,9 @@ Current fixture coverage includes `SPY`, `GLD`, and `QQQ` daily synthetic short
 CSVs, checksum-pinned synthetic volatility scenario windows, and a
 checksum-pinned synthetic `VAS` AU ETF instrument-contract window. None of the
 synthetic fixtures may be represented as observed market data. The
+aligned 20-bar `SPY`/`VAS`/`GLD` set also proves mixed U.S.-equity,
+AU-equity, and commodity-market ETF threshold-rebalance diagnostics without
+holdings or provider state. The
 historical fixture backtest report includes period diagnostics for `24h`, `1w`,
 `1m`, `1y`, `5y`, and `max` so the eToro Dashboard can render instrument-row
 market context without provider calls or account data.

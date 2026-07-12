@@ -8,6 +8,7 @@ canonical fixture-provenance manifest and CLI tests:
 
 | Fixture | Diagnostic purpose |
 | --- | --- |
+| `gld-commodity-synthetic-20-daily.csv` | Aligned commodity window for mixed-universe rebalance diagnostics |
 | `spy-slow-trend-202-daily.csv` | Default 50/200/3 slow-trend window |
 | `spy-volatility-stable-20-daily.csv` | Default stable/no-trigger window |
 | `spy-volatility-decline-20-daily.csv` | Default active-decline trigger window |
