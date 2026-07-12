@@ -80,6 +80,17 @@ fields without raw metric payloads.
 `--mode execute`, `--mode trade`, and `--mode trading` are rejected before any
 work runs.
 
+Canonical dashboard contract:
+
+```sh
+PYTHONPATH=src python3.13 -m money_maker_3000.contract_manifest --check
+```
+
+`contracts/dashboard-simulation-contract.json` is generated from the Python
+contract source and contains only redacted strategy/configuration metadata.
+After an intentional contract change, regenerate it with `--write`. CI fails
+when the committed artifact drifts from `contracts.py`.
+
 Ledger report:
 
 ```sh

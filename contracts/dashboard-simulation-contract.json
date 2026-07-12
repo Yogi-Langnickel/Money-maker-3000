@@ -1,0 +1,354 @@
+{
+  "blockedInstrumentClasses": [
+    "CFD",
+    "CRYPTO",
+    "DERIVATIVE",
+    "OPTION"
+  ],
+  "cadences": [
+    "daily",
+    "weekly"
+  ],
+  "disabledRunModes": [
+    "execute",
+    "trade",
+    "trading"
+  ],
+  "instrumentClasses": [
+    "EQUITY",
+    "ETF",
+    "FOREX",
+    "COMMODITY"
+  ],
+  "marketInstrumentClassRules": {
+    "AU_EQUITIES": [
+      "EQUITY",
+      "ETF"
+    ],
+    "COMMODITIES": [
+      "COMMODITY",
+      "ETF"
+    ],
+    "FOREX": [
+      "FOREX"
+    ],
+    "US_EQUITIES": [
+      "EQUITY",
+      "ETF"
+    ]
+  },
+  "markets": [
+    "US_EQUITIES",
+    "AU_EQUITIES",
+    "FOREX",
+    "COMMODITIES"
+  ],
+  "maxConfigurableBudgetUsd": 2500.0,
+  "maxDecisionsPerDay": 3,
+  "minimumEvaluationIntervalMinutes": 240,
+  "runModePolicy": {
+    "backtest": {
+      "accountData": "absent",
+      "enabled": true,
+      "executionRoutes": "absent",
+      "historicalInputs": "offline-fixture-only",
+      "providerCalls": "blocked"
+    },
+    "execute": {
+      "demoExecution": "blocked",
+      "enabled": false,
+      "liveExecution": "blocked",
+      "providerCalls": "blocked",
+      "reason": "demo execution requires a separate review and explicit approval"
+    },
+    "trade": {
+      "demoExecution": "blocked",
+      "enabled": false,
+      "liveExecution": "blocked",
+      "providerCalls": "blocked",
+      "reason": "trading aliases are disabled; only offline backtest mode is allowed"
+    },
+    "trading": {
+      "demoExecution": "blocked",
+      "enabled": false,
+      "liveExecution": "blocked",
+      "providerCalls": "blocked",
+      "reason": "trading aliases are disabled; only offline backtest mode is allowed"
+    }
+  },
+  "runModes": [
+    "backtest"
+  ],
+  "safety": {
+    "accountData": "absent",
+    "arbitraryStrategyCode": "blocked",
+    "credentials": "absent",
+    "demoExecution": "blocked",
+    "liveExecution": "blocked",
+    "orderPreview": "blocked",
+    "providerCalls": "blocked"
+  },
+  "schemaVersion": "dashboard-simulation-contract.v1",
+  "selectableBudgetsUsd": [
+    500.0,
+    1000.0,
+    1500.0,
+    2500.0
+  ],
+  "source": "Money-maker-3000/src/money_maker_3000/contracts.py",
+  "strategyIds": [
+    "dca-cash-reserve",
+    "threshold-rebalance",
+    "volatility-band-accumulator",
+    "slow-trend-allocation",
+    "news-aware-watchlist"
+  ],
+  "strategyRules": {
+    "dca-cash-reserve": {
+      "allowedInstrumentClasses": [
+        "EQUITY",
+        "ETF"
+      ],
+      "allowedMarkets": [
+        "US_EQUITIES",
+        "AU_EQUITIES"
+      ],
+      "cadence": "daily",
+      "name": "Cash-reserved DCA",
+      "parameterSchema": {
+        "cashReserveFloorUsd": {
+          "default": 100.0,
+          "maximum": 1000.0,
+          "minimum": 100.0,
+          "type": "number"
+        },
+        "cooldownDays": {
+          "default": 1,
+          "maximum": 14,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "fixedOrderUsd": {
+          "default": 100.0,
+          "maximum": 250.0,
+          "minimum": 25.0,
+          "type": "number"
+        },
+        "maxOrdersPerWeek": {
+          "default": 2,
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "orderFractionPct": {
+          "default": 0.1,
+          "maximum": 0.25,
+          "minimum": 0.01,
+          "type": "number"
+        }
+      },
+      "status": "simulation-only",
+      "version": "0.1.0-sim"
+    },
+    "news-aware-watchlist": {
+      "allowedInstrumentClasses": [
+        "EQUITY",
+        "ETF",
+        "FOREX",
+        "COMMODITY"
+      ],
+      "allowedMarkets": [
+        "US_EQUITIES",
+        "AU_EQUITIES",
+        "FOREX",
+        "COMMODITIES"
+      ],
+      "cadence": "daily",
+      "name": "News-aware watchlist",
+      "parameterSchema": {
+        "blackoutTags": {
+          "default": [
+            "earnings",
+            "regulatory-halt"
+          ],
+          "maxItems": 12,
+          "type": "stringList"
+        },
+        "contextTtlDays": {
+          "default": 3,
+          "maximum": 14,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "severityThreshold": {
+          "default": "medium",
+          "type": "enum",
+          "values": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "sourceLabels": {
+          "default": [
+            "market-calendar",
+            "issuer-filings"
+          ],
+          "maxItems": 8,
+          "type": "stringList"
+        }
+      },
+      "status": "context-only",
+      "version": "0.1.0-plan"
+    },
+    "slow-trend-allocation": {
+      "allowedInstrumentClasses": [
+        "EQUITY",
+        "ETF"
+      ],
+      "allowedMarkets": [
+        "US_EQUITIES",
+        "AU_EQUITIES"
+      ],
+      "cadence": "weekly",
+      "name": "Slow trend allocation",
+      "parameterSchema": {
+        "confirmationBars": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "longLookbackDays": {
+          "default": 200,
+          "maximum": 252,
+          "minimum": 60,
+          "type": "integer"
+        },
+        "maxOrderUsd": {
+          "default": 150.0,
+          "maximum": 250.0,
+          "minimum": 25.0,
+          "type": "number"
+        },
+        "orderFractionPct": {
+          "default": 0.1,
+          "maximum": 0.2,
+          "minimum": 0.01,
+          "type": "number"
+        },
+        "shortLookbackDays": {
+          "default": 50,
+          "maximum": 100,
+          "minimum": 10,
+          "type": "integer"
+        }
+      },
+      "status": "simulation-only",
+      "version": "0.1.0-sim"
+    },
+    "threshold-rebalance": {
+      "allowedInstrumentClasses": [
+        "EQUITY",
+        "ETF",
+        "COMMODITY"
+      ],
+      "allowedMarkets": [
+        "US_EQUITIES",
+        "AU_EQUITIES",
+        "COMMODITIES"
+      ],
+      "cadence": "weekly",
+      "name": "Threshold rebalance",
+      "parameterSchema": {
+        "maxOpenPositions": {
+          "default": 3,
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maxOrderUsd": {
+          "default": 250.0,
+          "maximum": 250.0,
+          "minimum": 25.0,
+          "type": "number"
+        },
+        "minCashReserveUsd": {
+          "default": 100.0,
+          "maximum": 1000.0,
+          "minimum": 100.0,
+          "type": "number"
+        },
+        "rebalanceThresholdPct": {
+          "default": 5.0,
+          "maximum": 20.0,
+          "minimum": 1.0,
+          "type": "number"
+        },
+        "targetWeights": {
+          "default": {
+            "GLD": 0.3,
+            "SPY": 0.7
+          },
+          "maxSymbols": 8,
+          "type": "weights"
+        }
+      },
+      "status": "simulation-only",
+      "version": "0.1.0-sim"
+    },
+    "volatility-band-accumulator": {
+      "allowedInstrumentClasses": [
+        "EQUITY",
+        "ETF"
+      ],
+      "allowedMarkets": [
+        "US_EQUITIES",
+        "AU_EQUITIES"
+      ],
+      "cadence": "daily",
+      "name": "Volatility band accumulator",
+      "parameterSchema": {
+        "cashReserveFloorUsd": {
+          "default": 150.0,
+          "maximum": 1000.0,
+          "minimum": 100.0,
+          "type": "number"
+        },
+        "cooldownDays": {
+          "default": 3,
+          "maximum": 14,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "dropTriggerPct": {
+          "default": 3.0,
+          "maximum": 15.0,
+          "minimum": 1.0,
+          "type": "number"
+        },
+        "lookbackDays": {
+          "default": 20,
+          "maximum": 252,
+          "minimum": 5,
+          "type": "integer"
+        },
+        "maxOrderUsd": {
+          "default": 150.0,
+          "maximum": 250.0,
+          "minimum": 25.0,
+          "type": "number"
+        },
+        "maxOrdersPerWeek": {
+          "default": 1,
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "status": "simulation-only",
+      "version": "0.1.0-sim"
+    }
+  },
+  "version": "0.1.0-sim"
+}
