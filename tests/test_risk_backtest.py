@@ -21,11 +21,13 @@ from money_maker_3000.contracts import (
 )
 from money_maker_3000.engine import build_simulation_run
 from money_maker_3000.ledger import (
+    MAX_LEDGER_LINE_BYTES,
     append_ledger_record,
     build_ledger_record,
     build_ledger_report,
     export_ledger_report,
     read_ledger_records,
+    read_ledger_records_with_integrity,
     redact_trade_log_entry,
 )
 from money_maker_3000.market_history import (
@@ -875,6 +877,98 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertNotIn("operator@example.test", serialized)
         self.assertNotIn("api-secret-abcdef12", serialized)
         self.assertNotIn("token-secret-abcdef12", serialized)
+
+    def test_ledger_integrity_recovery_reports_corruption_without_mutating_source(self):
+        valid_record = build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"][0]
+        unsafe_legacy = {
+            "ledgerVersion": 1,
+            "strategyId": "dca-cash-reserve",
+            "decision": "skip",
+            "riskResult": "blocked",
+            "accountEmail": "private@example.com",
+            "tradeLogEntry": {"action": "simulated-skip", "reasonCode": "blocked"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "mixed-ledger.jsonl"
+            contents = (
+                json.dumps(valid_record) + "\n" +
+                "{not-json}\n" +
+                "[1,2,3]\n" +
+                json.dumps(unsafe_legacy) + "\n"
+            )
+            ledger_path.write_text(contents, encoding="utf-8")
+            recovered = read_ledger_records_with_integrity(ledger_path)
+            ledger_report = export_ledger_report(ledger_path)
+            unchanged = ledger_path.read_text(encoding="utf-8")
+
+        self.assertEqual(unchanged, contents)
+        self.assertEqual(recovered["integrity"]["state"], "corrupted")
+        self.assertFalse(recovered["integrity"]["complete"])
+        self.assertEqual(recovered["integrity"]["nonemptyLineCount"], 4)
+        self.assertEqual(recovered["integrity"]["acceptedRecordCount"], 2)
+        self.assertEqual(recovered["integrity"]["rejectedRecordCount"], 2)
+        self.assertEqual(recovered["integrity"]["warningCount"], 2)
+        self.assertEqual(recovered["integrity"]["errorCount"], 2)
+        self.assertEqual(recovered["integrity"]["sourceMutation"], "not-attempted")
+        self.assertEqual(
+            [issue["code"] for issue in recovered["integrity"]["issues"]],
+            ["invalid-json", "invalid-record-shape", "legacy-record-normalized", "sensitive-record-redacted"],
+        )
+        self.assertTrue(all(issue["rawContent"] == "absent" for issue in recovered["integrity"]["issues"]))
+        self.assertEqual(ledger_report["integrity"], recovered["integrity"])
+        recovered_serialized = json.dumps(recovered).lower()
+        serialized = json.dumps(ledger_report).lower()
+        self.assertNotIn("private@example.com", recovered_serialized)
+        self.assertNotIn("private@example.com", serialized)
+        self.assertNotIn("not-json", serialized)
+
+    def test_ledger_integrity_rejects_invalid_v2_record(self):
+        invalid_record = {
+            **build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"][0],
+            "unexpectedField": "unsafe",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "invalid-v2.jsonl"
+            ledger_path.write_text(json.dumps(invalid_record) + "\n", encoding="utf-8")
+            recovered = read_ledger_records_with_integrity(ledger_path)
+
+        self.assertEqual(recovered["records"], [])
+        self.assertEqual(recovered["integrity"]["state"], "corrupted")
+        self.assertEqual(recovered["integrity"]["issues"][0]["code"], "invalid-audit-record")
+
+    def test_ledger_integrity_rejects_oversized_and_invalid_utf8_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "binary-corruption.jsonl"
+            contents = b"x" * (MAX_LEDGER_LINE_BYTES + 1) + b"\n\xff\n"
+            ledger_path.write_bytes(contents)
+            recovered = read_ledger_records_with_integrity(ledger_path)
+            unchanged = ledger_path.read_bytes()
+
+        self.assertEqual(unchanged, contents)
+        self.assertEqual(recovered["records"], [])
+        self.assertEqual(recovered["integrity"]["nonemptyLineCount"], 2)
+        self.assertEqual(recovered["integrity"]["rejectedRecordCount"], 2)
+        self.assertEqual(
+            [issue["code"] for issue in recovered["integrity"]["issues"]],
+            ["oversized-record", "invalid-utf8"],
+        )
+
+    def test_ledger_report_rejects_caller_supplied_integrity_metadata(self):
+        malicious_integrity = {
+            "state": "clean",
+            "complete": True,
+            "nonemptyLineCount": 0,
+            "acceptedRecordCount": 0,
+            "rejectedRecordCount": 0,
+            "warningCount": 0,
+            "errorCount": 0,
+            "issues": [],
+            "sourceMutation": "not-attempted",
+            "operatorSecret": "api-secret-abcdef12",
+        }
+
+        with self.assertRaisesRegex(ValueError, "ledger integrity metadata is invalid"):
+            build_ledger_report(records=[], integrity=malicious_integrity)
 
     def test_ledger_report_normalizes_unsafe_legacy_state_fields(self):
         report = build_ledger_report(

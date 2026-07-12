@@ -367,6 +367,8 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.command == "readiness" and not result.get("ready", False):
         return 1
+    if args.command == "ledger-report" and not result.get("integrity", {}).get("complete", False):
+        return 1
     return 0
 
 

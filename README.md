@@ -104,6 +104,11 @@ Ledger report:
 PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report .local/simulation-ledger.jsonl
 ```
 
+The report reader recovers valid records from malformed JSONL without changing
+the source file. It emits allowlisted integrity issue codes and counts only;
+raw malformed content is never copied into the report. A corrupted ledger
+returns exit status `1`, while a clean or warning-only recovery returns `0`.
+
 Optional stdlib profiling:
 
 ```sh
@@ -161,6 +166,10 @@ GitHub Actions runs the same compile and standard-library test gates on Python
 - Redacted local JSONL ledger appends are single-writer locked so run and
   correlation duplicate checks happen in the same critical section as the
   append.
+- Ledger report recovery rejects malformed, oversized, non-object, invalid
+  UTF-8, and invalid v2 records; accepts redacted legacy records with explicit
+  warnings; never mutates the source; and fails closed when any record is
+  rejected.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
   claims, provider calls, or account-linked persistence.
 
