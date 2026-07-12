@@ -3,6 +3,7 @@ import multiprocessing
 import os
 import tempfile
 import unittest
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -521,6 +522,12 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(batch["perSymbolDiagnostics"][0]["parserVersion"], "0.1.0-streaming-stdlib")
         self.assertEqual(batch["perSymbolDiagnostics"][0]["coverage"]["rowCount"], 3)
         self.assertEqual(batch["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
+        self.assertEqual(
+            batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["dtoVersion"],
+            "strategy-history-diagnostics.v1",
+        )
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["candidateIntent"], "skip")
+        self.assertEqual(batch["summary"]["strategyHistoryStateHistogram"], {"not-applicable": 3})
         self.assertIn("missing-reconciliation", batch["summary"]["vetoHistogram"])
         for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
@@ -536,6 +543,25 @@ class RiskAndBacktestTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "duplicate offline fixture symbol"):
             build_offline_fixture_batch_diagnostics(reports=[report, report])
+
+    def test_offline_fixture_batch_rejects_unsafe_strategy_history_diagnostics(self):
+        with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
+            report = build_historical_fixture_backtest(
+                bars=iter_market_history_bars(source, selected_symbol="SPY"),
+                selected_instrument=SELECTED_SPY,
+                started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+                input_sha256=sha256_file(FIXTURE_PATH),
+            )
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["providerCalls"] = "allowed"
+        with self.assertRaisesRegex(ValueError, "strategy history diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["metrics"] = {"accountId": 123}
+        with self.assertRaisesRegex(ValueError, "strategy history metrics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
     def test_market_history_parser_rejects_sensitive_columns_and_bad_rows(self):
         with self.assertRaisesRegex(ValueError, "account-linked columns"):
