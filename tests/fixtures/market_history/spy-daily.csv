@@ -1,4 +1,4 @@
 symbol,date,open,high,low,close,volume,source
-SPY,2026-05-11,520.10,523.20,519.40,522.50,71000000,public-test-fixture
-SPY,2026-05-12,522.60,525.00,521.80,524.30,68000000,public-test-fixture
-SPY,2026-05-13,524.40,526.50,523.10,525.70,73500000,public-test-fixture
+SPY,2026-05-11,520.10,523.20,519.40,522.50,71000000,synthetic-short-fixture
+SPY,2026-05-12,522.60,525.00,521.80,524.30,68000000,synthetic-short-fixture
+SPY,2026-05-13,524.40,526.50,523.10,525.70,73500000,synthetic-short-fixture

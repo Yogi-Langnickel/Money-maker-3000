@@ -1,4 +1,4 @@
 symbol,date,open,high,low,close,volume,source
-GLD,2026-05-11,215.10,216.40,214.80,216.00,9200000,public-test-fixture
-GLD,2026-05-12,216.20,217.90,215.70,217.50,8800000,public-test-fixture
-GLD,2026-05-13,217.40,218.10,216.90,217.20,9400000,public-test-fixture
+GLD,2026-05-11,215.10,216.40,214.80,216.00,9200000,synthetic-short-fixture
+GLD,2026-05-12,216.20,217.90,215.70,217.50,8800000,synthetic-short-fixture
+GLD,2026-05-13,217.40,218.10,216.90,217.20,9400000,synthetic-short-fixture

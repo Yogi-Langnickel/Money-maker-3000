@@ -419,7 +419,7 @@ class RiskAndBacktestTests(unittest.TestCase):
             summary = summarize_market_history_bars(bars)
 
         self.assertEqual(summary["symbol"], "SPY")
-        self.assertEqual(summary["source"], "public-test-fixture")
+        self.assertEqual(summary["source"], "synthetic-short-fixture")
         self.assertEqual(summary["barCount"], 3)
         self.assertEqual(summary["firstDate"], "2026-05-11")
         self.assertEqual(summary["lastDate"], "2026-05-13")
@@ -459,7 +459,7 @@ class RiskAndBacktestTests(unittest.TestCase):
                 input_sha256=sha256_file(GLD_FIXTURE_PATH),
             )
 
-        self.assertEqual(report["metadata"]["dataSource"], "public-test-fixture")
+        self.assertEqual(report["metadata"]["dataSource"], "synthetic-short-fixture")
         self.assertEqual(report["metadata"]["rowCount"], 3)
         self.assertEqual(report["periodDiagnostics"]["symbol"], "GLD")
         self.assertEqual(report["periodDiagnostics"]["providerCalls"], "blocked")
@@ -474,7 +474,7 @@ class RiskAndBacktestTests(unittest.TestCase):
             )
         serialized = json.dumps(report)
 
-        self.assertEqual(report["metadata"]["dataSource"], "public-test-fixture")
+        self.assertEqual(report["metadata"]["dataSource"], "synthetic-short-fixture")
         self.assertEqual(report["metadata"]["rowCount"], 3)
         self.assertEqual(report["metadata"]["firstDate"], "2026-05-11")
         self.assertEqual(report["metadata"]["lastDate"], "2026-05-13")
@@ -631,7 +631,7 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["providerCalls"], "blocked")
         self.assertEqual(report["executionRoutes"], "absent")
         self.assertEqual(report["metadata"]["strategyId"], "dca-cash-reserve")
-        self.assertEqual(report["metadata"]["dataSource"], "public-test-fixture")
+        self.assertEqual(report["metadata"]["dataSource"], "synthetic-short-fixture")
         self.assertEqual(report["metadata"]["firstDate"], "2026-05-11")
         self.assertEqual(report["metadata"]["lastDate"], "2026-05-13")
         self.assertEqual(report["metadata"]["rowCount"], 3)

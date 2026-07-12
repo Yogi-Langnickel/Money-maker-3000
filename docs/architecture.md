@@ -17,6 +17,8 @@ The runtime package lives under `src/money_maker_3000/`.
   validator.
 - `contract_manifest.py`: canonical redacted dashboard manifest generation and
   drift validation from the Python contract source.
+- `fixture_provenance.py`: canonical inventory and fail-closed drift validation
+  for every committed offline market-history CSV.
 - `risk.py`: pure fail-closed risk gate.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
   accumulator plus selected-period market diagnostics for dashboard charting.
@@ -43,6 +45,10 @@ The runtime package lives under `src/money_maker_3000/`.
 The committed `contracts/dashboard-simulation-contract.json` artifact is the
 only cross-repository dashboard contract source. Consumers pin the producer
 commit and artifact hash; they do not manually recreate Python constants.
+
+The committed `contracts/market-history-fixture-provenance.json` artifact pins
+every current synthetic CSV and refuses observed-market classification without
+explicit source, license, attribution, and redistribution metadata.
 
 There is no Node runtime requirement.
 

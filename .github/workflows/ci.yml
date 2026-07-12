@@ -44,3 +44,8 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m money_maker_3000.contract_manifest --check
+
+      - name: Check market-history fixture provenance drift
+        env:
+          PYTHONPATH: src
+        run: python -m money_maker_3000.fixture_provenance --check
