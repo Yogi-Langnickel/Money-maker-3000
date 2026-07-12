@@ -175,6 +175,11 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["coverage"]["totalRows"], 9)
         self.assertEqual(payload["metadata"]["symbols"], ["GLD", "QQQ", "SPY"])
         self.assertEqual(payload["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
+        self.assertEqual(
+            payload["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["providerCalls"],
+            "blocked",
+        )
+        self.assertEqual(payload["summary"]["strategyHistoryStateHistogram"], {"not-applicable": 3})
         self.assertEqual(payload["perSymbolDiagnostics"][1]["coverage"]["rowCount"], 3)
         self.assertEqual(payload["perSymbolDiagnostics"][2]["symbol"], "QQQ")
         self.assertNotIn("1000000", serialized)
@@ -196,6 +201,30 @@ class CliTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["coverage"]["fixtureCount"], 3)
         self.assertEqual([item["symbol"] for item in payload["perSymbolDiagnostics"]], ["SPY", "GLD", "QQQ"])
+
+    def test_fixture_batch_cli_preserves_strategy_history_states(self):
+        result = self.run_cli(
+            "fixture-batch",
+            "--fixture",
+            f"SPY={FIXTURE_PATH}",
+            "--strategy",
+            "volatility-band-accumulator",
+            "--strategy-params-json",
+            (
+                '{"lookbackDays":5,"dropTriggerPct":3,"maxOrderUsd":150,'
+                '"maxOrdersPerWeek":1,"cooldownDays":3,"cashReserveFloorUsd":150}'
+            ),
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        diagnostics = payload["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]
+        self.assertEqual(diagnostics["strategyId"], "volatility-band-accumulator")
+        self.assertEqual(diagnostics["state"], "insufficient-history")
+        self.assertEqual(diagnostics["candidateIntent"], "skip")
+        self.assertEqual(payload["summary"]["strategyHistoryStateHistogram"], {"insufficient-history": 1})
 
     def test_readiness_cli_reports_backtest_ready_without_provider_calls(self):
         result = self.run_cli(
@@ -224,6 +253,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["liveExecution"], "blocked")
         self.assertEqual(payload["metadata"]["symbols"], ["GLD", "QQQ", "SPY"])
         self.assertEqual([fixture["symbol"] for fixture in payload["fixtureDiagnostics"]], ["SPY", "GLD", "QQQ"])
+        self.assertTrue(
+            all(
+                fixture["strategyHistoryDiagnostics"]["candidateIntent"] == "skip"
+                for fixture in payload["fixtureDiagnostics"]
+            )
+        )
         self.assertTrue(all(gate["ok"] for gate in payload["gates"]))
         self.assertTrue(payload["nextSafeCommands"])
         self.assertNotIn("1000000", serialized)

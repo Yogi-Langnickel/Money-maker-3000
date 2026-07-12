@@ -52,6 +52,9 @@ Updated: 2026-06-17
   malformed history and invalid parameters fail closed; candidate intent stays
   `skip`, provider calls stay blocked, and no execution/profitability claim is
   produced.
+- Fixture-batch diagnostics preserve validated per-symbol strategy-history
+  observations and aggregate only a state histogram. Readiness diagnostics
+  expose the state and fail-closed boundary fields without copying raw metrics.
 - Offline fixture batch diagnostics can run multiple fixture files from a JSON
   manifest or repeated `SYMBOL=PATH` CLI entries, aggregate coverage/veto
   summaries, and emit per-symbol SHA-256/parser metadata/period diagnostics

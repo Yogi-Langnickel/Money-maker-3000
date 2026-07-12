@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import math
 import platform
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Iterable, Iterator
 
 from money_maker_3000.contracts import (
     DEFAULT_ALLOCATION_POLICY,
+    SIMULATION_STRATEGY_PARAMETER_SCHEMAS,
     build_allocation_policy,
     merge_simulation_config,
     utc_iso,
@@ -392,6 +394,7 @@ def build_offline_fixture_batch_diagnostics(
     total_events = 0
     blocked_events = 0
     veto_histogram: dict[str, int] = {}
+    strategy_history_state_histogram: dict[str, int] = {}
 
     for report in reports:
         if report.get("providerCalls") != "blocked":
@@ -408,10 +411,12 @@ def build_offline_fixture_batch_diagnostics(
         row_count = int(metadata["rowCount"])
         event_count = int(report["summary"]["eventCount"])
         blocked_count = int(report["summary"]["blockedCount"])
+        strategy_history = _validated_strategy_history_diagnostics(report.get("strategyHistoryDiagnostics"))
         total_rows += row_count
         total_events += event_count
         blocked_events += blocked_count
         _merge_histogram(veto_histogram, report["summary"]["vetoHistogram"])
+        _merge_histogram(strategy_history_state_histogram, {strategy_history["state"]: 1})
         per_symbol.append(
             {
                 "symbol": symbol,
@@ -429,6 +434,7 @@ def build_offline_fixture_batch_diagnostics(
                     "lastDate": metadata["lastDate"],
                 },
                 "periodDiagnostics": report["periodDiagnostics"],
+                "strategyHistoryDiagnostics": strategy_history,
                 "summary": report["summary"],
                 "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
             }
@@ -466,6 +472,7 @@ def build_offline_fixture_batch_diagnostics(
             "eventCount": total_events,
             "blockedCount": blocked_events,
             "vetoHistogram": veto_histogram,
+            "strategyHistoryStateHistogram": strategy_history_state_histogram,
             "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
         },
     }
@@ -489,3 +496,139 @@ def _tee_history(
 def _merge_histogram(target: dict[str, int], source: dict[str, int]) -> None:
     for key, value in source.items():
         target[key] = target.get(key, 0) + int(value)
+
+
+def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
+    ordered_keys = (
+        "dtoVersion",
+        "strategyId",
+        "barCount",
+        "latestDate",
+        "providerCalls",
+        "accountData",
+        "executionRoutes",
+        "candidateIntent",
+        "performanceClaims",
+        "requiredBarCount",
+        "state",
+        "metrics",
+        "parameterState",
+    )
+    if not isinstance(value, dict) or set(value) != set(ordered_keys):
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+    if (
+        value["dtoVersion"] != "strategy-history-diagnostics.v1"
+        or value["providerCalls"] != "blocked"
+        or value["accountData"] != "absent"
+        or value["executionRoutes"] != "absent"
+        or value["candidateIntent"] != "skip"
+        or value["performanceClaims"] != "historical-pattern-diagnostics-only-no-pnl-or-profitability-claim"
+        or value["strategyId"] not in SIMULATION_STRATEGY_PARAMETER_SCHEMAS
+        or value["parameterState"] not in {"valid", "invalid-defaulted"}
+        or value["state"] not in {
+            "not-applicable",
+            "insufficient-history",
+            "invalid-history",
+            "trigger-observed",
+            "no-trigger-observed",
+            "trend-confirmed",
+            "trend-not-confirmed",
+        }
+        or not isinstance(value["barCount"], int)
+        or isinstance(value["barCount"], bool)
+        or value["barCount"] < 0
+        or not isinstance(value["requiredBarCount"], int)
+        or isinstance(value["requiredBarCount"], bool)
+        or value["requiredBarCount"] < 0
+    ):
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+
+    latest_date = value["latestDate"]
+    if latest_date is not None:
+        try:
+            parsed_latest_date = date.fromisoformat(latest_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("offline fixture batch strategy history diagnostics are invalid") from exc
+        if parsed_latest_date.isoformat() != latest_date:
+            raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+    if value["barCount"] > 0 and latest_date is None and value["state"] != "invalid-history":
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+
+    volatility_states = {"trigger-observed", "no-trigger-observed"}
+    trend_states = {"trend-confirmed", "trend-not-confirmed"}
+    if value["state"] in volatility_states and value["strategyId"] != "volatility-band-accumulator":
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+    if value["state"] in trend_states and value["strategyId"] != "slow-trend-allocation":
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+
+    ordered_metric_keys = (
+        "lookbackBars",
+        "latestClose",
+        "rollingPeakClose",
+        "declineFromRollingPeakPct",
+        "dropTriggerPct",
+        "shortLookbackBars",
+        "longLookbackBars",
+        "confirmationBars",
+        "confirmationMatches",
+        "shortAverageClose",
+        "longAverageClose",
+    )
+    metrics = value["metrics"]
+    metric_states = volatility_states | trend_states
+    if (value["state"] in metric_states) != (metrics is not None):
+        raise ValueError("offline fixture batch strategy history metrics are invalid")
+    if metrics is not None:
+        if not isinstance(metrics, dict) or not set(metrics).issubset(set(ordered_metric_keys)):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if any(
+            isinstance(metric, bool) or not isinstance(metric, (int, float)) or not math.isfinite(float(metric))
+            for metric in metrics.values()
+        ):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        volatility_metric_keys = {
+            "lookbackBars",
+            "latestClose",
+            "rollingPeakClose",
+            "declineFromRollingPeakPct",
+            "dropTriggerPct",
+        }
+        trend_metric_keys = {
+            "shortLookbackBars",
+            "longLookbackBars",
+            "confirmationBars",
+            "confirmationMatches",
+            "shortAverageClose",
+            "longAverageClose",
+        }
+        if value["state"] in volatility_states and set(metrics) != volatility_metric_keys:
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if value["state"] in trend_states and set(metrics) != trend_metric_keys:
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if value["state"] in volatility_states and (
+            not isinstance(metrics["lookbackBars"], int)
+            or metrics["lookbackBars"] <= 0
+            or metrics["latestClose"] <= 0
+            or metrics["rollingPeakClose"] < metrics["latestClose"]
+            or metrics["declineFromRollingPeakPct"] > 0
+            or metrics["dropTriggerPct"] <= 0
+        ):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if value["state"] in trend_states and (
+            any(
+                not isinstance(metrics[key], int)
+                for key in ("shortLookbackBars", "longLookbackBars", "confirmationBars", "confirmationMatches")
+            )
+            or metrics["shortLookbackBars"] <= 0
+            or metrics["longLookbackBars"] <= metrics["shortLookbackBars"]
+            or metrics["confirmationBars"] <= 0
+            or not 0 <= metrics["confirmationMatches"] <= metrics["confirmationBars"]
+            or metrics["shortAverageClose"] <= 0
+            or metrics["longAverageClose"] <= 0
+        ):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        metrics = {key: metrics[key] for key in ordered_metric_keys if key in metrics}
+    return {
+        key: dict(metrics) if key == "metrics" and metrics is not None else value[key]
+        for key in ordered_keys
+    }
