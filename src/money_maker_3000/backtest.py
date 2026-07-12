@@ -22,6 +22,7 @@ from money_maker_3000.market_history import (
     build_period_performance_diagnostics,
 )
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, assess_data_freshness
+from money_maker_3000.rebalance_history import build_rebalance_history_diagnostics
 
 DEFAULT_SCENARIOS = (
     {"scenarioId": "dca-500", "strategyId": "dca-cash-reserve", "budgetUsd": 500.0},
@@ -388,6 +389,7 @@ def build_offline_fixture_batch_diagnostics(
     started_at: datetime | None = None,
 ) -> dict[str, Any]:
     started = started_at or datetime.fromisoformat("2026-05-15T00:00:00+00:00")
+    report_list = list(reports)
     per_symbol = []
     symbols: set[str] = set()
     total_rows = 0
@@ -396,7 +398,7 @@ def build_offline_fixture_batch_diagnostics(
     veto_histogram: dict[str, int] = {}
     strategy_history_state_histogram: dict[str, int] = {}
 
-    for report in reports:
+    for report in report_list:
         if report.get("providerCalls") != "blocked":
             raise ValueError("offline fixture batch reports must block provider calls")
         if report.get("executionRoutes") != "absent":
@@ -468,6 +470,7 @@ def build_offline_fixture_batch_diagnostics(
             "execution": "blocked",
         },
         "perSymbolDiagnostics": per_symbol,
+        "rebalanceHistoryDiagnostics": build_rebalance_history_diagnostics(report_list),
         "summary": {
             "eventCount": total_events,
             "blockedCount": blocked_events,

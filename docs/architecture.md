@@ -24,6 +24,10 @@ The runtime package lives under `src/money_maker_3000/`.
   predefined volatility-band and slow-trend strategies. It emits no orders,
   recommendations, profitability claims, or provider/account data and fails
   closed on malformed history or parameters.
+- `rebalance_history.py`: multi-symbol historical relative-weight drift for the
+  predefined threshold-rebalance strategy. It requires identical offline
+  windows and target coverage and never consumes holdings, balances, P/L, or
+  provider data.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
 - `readiness.py`: offline backtest-readiness gates for strategy registry,
   allocation policy, run-mode policy, provider boundary, and fixture coverage.
