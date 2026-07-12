@@ -12,6 +12,7 @@ from money_maker_3000.contracts import (
     utc_iso,
 )
 from money_maker_3000.engine import CONFIG_VERSION, build_simulation_run
+from money_maker_3000.history_signals import build_strategy_history_diagnostics
 from money_maker_3000.market_history import (
     Bar,
     MarketHistoryAccumulator,
@@ -367,6 +368,11 @@ def build_historical_fixture_backtest(
         },
         "history": history_summary,
         "periodDiagnostics": build_period_performance_diagnostics(period_bars),
+        "strategyHistoryDiagnostics": build_strategy_history_diagnostics(
+            period_bars,
+            strategy_id=strategy_id,
+            strategy_parameters=strategy_parameters,
+        ),
         "summary": event_summary.to_dict(),
         "scenarioSummaries": scenario_summaries,
         "runs": runs,

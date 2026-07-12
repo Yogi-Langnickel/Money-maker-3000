@@ -64,6 +64,13 @@ real P/L, win-rate, drawdown, Sharpe ratio, or execution-quality metrics.
 The period-diagnostics fixture buffer is capped by `--max-fixture-rows`, which
 defaults to 10,000 rows.
 
+Historical reports also include `strategyHistoryDiagnostics`. Volatility-band
+fixtures report a deterministic price decline from a rolling close peak; slow-trend
+fixtures report deterministic short/long average and confirmation-window
+observations. Insufficient, invalid, or malformed inputs fail closed. Every
+state remains diagnostics-only with candidate intent `skip`, provider calls
+blocked, account data absent, and execution routes absent.
+
 `--mode execute`, `--mode trade`, and `--mode trading` are rejected before any
 work runs.
 
