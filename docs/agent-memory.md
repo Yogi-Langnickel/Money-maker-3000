@@ -52,6 +52,9 @@ Updated: 2026-06-17
   malformed history and invalid parameters fail closed; candidate intent stays
   `skip`, provider calls stay blocked, and no execution/profitability claim is
   produced.
+- Volatility history distinguishes stable/no-trigger, active-decline trigger,
+  and recovered-after-decline observations from the bounded offline window;
+  every state remains a non-recommendation with candidate intent `skip`.
 - Fixture-batch diagnostics preserve validated per-symbol strategy-history
   observations and aggregate only a state histogram. Readiness diagnostics
   expose the state and fail-closed boundary fields without copying raw metrics.

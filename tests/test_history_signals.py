@@ -34,10 +34,30 @@ class HistorySignalTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["state"], "trigger-observed")
         self.assertEqual(diagnostics["metrics"]["rollingPeakClose"], 102.0)
+        self.assertEqual(diagnostics["metrics"]["windowLowClose"], 96.0)
         self.assertEqual(diagnostics["metrics"]["declineFromRollingPeakPct"], -5.882353)
+        self.assertEqual(diagnostics["metrics"]["maximumObservedDeclinePct"], -5.882353)
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertEqual(diagnostics["providerCalls"], "blocked")
         self.assertEqual(diagnostics["executionRoutes"], "absent")
+
+    def test_volatility_band_distinguishes_stable_and_recovering_windows(self):
+        stable = build_strategy_history_diagnostics(
+            bars_from_closes([100.0, 100.5, 100.0, 100.4, 100.2]),
+            strategy_id="volatility-band-accumulator",
+            strategy_parameters={"lookbackDays": 5, "dropTriggerPct": 3.0},
+        )
+        recovering = build_strategy_history_diagnostics(
+            bars_from_closes([100.0, 95.0, 92.0, 97.0, 99.0]),
+            strategy_id="volatility-band-accumulator",
+            strategy_parameters={"lookbackDays": 5, "dropTriggerPct": 3.0},
+        )
+
+        self.assertEqual(stable["state"], "no-trigger-observed")
+        self.assertEqual(recovering["state"], "recovery-observed")
+        self.assertEqual(recovering["metrics"]["declineFromRollingPeakPct"], -1.0)
+        self.assertEqual(recovering["metrics"]["maximumObservedDeclinePct"], -8.0)
+        self.assertEqual(recovering["candidateIntent"], "skip")
 
     def test_slow_trend_requires_full_window_and_confirmation(self):
         insufficient = build_strategy_history_diagnostics(

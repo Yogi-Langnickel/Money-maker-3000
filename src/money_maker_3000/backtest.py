@@ -530,6 +530,7 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
             "insufficient-history",
             "invalid-history",
             "trigger-observed",
+            "recovery-observed",
             "no-trigger-observed",
             "trend-confirmed",
             "trend-not-confirmed",
@@ -554,7 +555,7 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
     if value["barCount"] > 0 and latest_date is None and value["state"] != "invalid-history":
         raise ValueError("offline fixture batch strategy history diagnostics are invalid")
 
-    volatility_states = {"trigger-observed", "no-trigger-observed"}
+    volatility_states = {"trigger-observed", "recovery-observed", "no-trigger-observed"}
     trend_states = {"trend-confirmed", "trend-not-confirmed"}
     if value["state"] in volatility_states and value["strategyId"] != "volatility-band-accumulator":
         raise ValueError("offline fixture batch strategy history diagnostics are invalid")
@@ -565,7 +566,9 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         "lookbackBars",
         "latestClose",
         "rollingPeakClose",
+        "windowLowClose",
         "declineFromRollingPeakPct",
+        "maximumObservedDeclinePct",
         "dropTriggerPct",
         "shortLookbackBars",
         "longLookbackBars",
@@ -590,7 +593,9 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
             "lookbackBars",
             "latestClose",
             "rollingPeakClose",
+            "windowLowClose",
             "declineFromRollingPeakPct",
+            "maximumObservedDeclinePct",
             "dropTriggerPct",
         }
         trend_metric_keys = {
@@ -610,8 +615,26 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
             or metrics["lookbackBars"] <= 0
             or metrics["latestClose"] <= 0
             or metrics["rollingPeakClose"] < metrics["latestClose"]
+            or metrics["windowLowClose"] > metrics["latestClose"]
+            or metrics["windowLowClose"] <= 0
             or metrics["declineFromRollingPeakPct"] > 0
+            or metrics["maximumObservedDeclinePct"] > metrics["declineFromRollingPeakPct"]
             or metrics["dropTriggerPct"] <= 0
+        ):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if (
+            value["state"] == "trigger-observed"
+            and metrics["declineFromRollingPeakPct"] > -metrics["dropTriggerPct"]
+        ):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if value["state"] == "recovery-observed" and (
+            metrics["declineFromRollingPeakPct"] <= -metrics["dropTriggerPct"]
+            or metrics["maximumObservedDeclinePct"] > -metrics["dropTriggerPct"]
+        ):
+            raise ValueError("offline fixture batch strategy history metrics are invalid")
+        if value["state"] == "no-trigger-observed" and (
+            metrics["declineFromRollingPeakPct"] <= -metrics["dropTriggerPct"]
+            or metrics["maximumObservedDeclinePct"] <= -metrics["dropTriggerPct"]
         ):
             raise ValueError("offline fixture batch strategy history metrics are invalid")
         if value["state"] in trend_states and (

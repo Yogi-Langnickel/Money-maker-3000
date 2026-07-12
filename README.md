@@ -70,6 +70,9 @@ fixtures report deterministic short/long average and confirmation-window
 observations. Insufficient, invalid, or malformed inputs fail closed. Every
 state remains diagnostics-only with candidate intent `skip`, provider calls
 blocked, account data absent, and execution routes absent.
+Volatility windows distinguish no-trigger, active-decline trigger, and
+recovered-after-decline observations using only the bounded offline close
+history; none of those states is a recommendation.
 Fixture-batch output retains these per-symbol states and emits only a state
 histogram in its summary. Readiness output carries the same redacted boundary
 fields without raw metric payloads.

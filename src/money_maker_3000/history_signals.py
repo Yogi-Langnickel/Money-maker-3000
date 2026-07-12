@@ -66,16 +66,32 @@ def _volatility_band(bars: list[Bar], parameters: dict[str, Any]) -> dict[str, A
 
     window = bars[-lookback:]
     peak_close = max(bar.close for bar in window)
+    window_low_close = min(bar.close for bar in window)
     latest_close = window[-1].close
     decline_pct = round(((latest_close - peak_close) / peak_close) * 100, 6)
+    running_peak = window[0].close
+    maximum_observed_decline_pct = 0.0
+    for bar in window:
+        running_peak = max(running_peak, bar.close)
+        observed_decline_pct = ((bar.close - running_peak) / running_peak) * 100
+        maximum_observed_decline_pct = min(maximum_observed_decline_pct, observed_decline_pct)
+    maximum_observed_decline_pct = round(maximum_observed_decline_pct, 6)
+    if decline_pct <= -trigger_pct:
+        state = "trigger-observed"
+    elif maximum_observed_decline_pct <= -trigger_pct:
+        state = "recovery-observed"
+    else:
+        state = "no-trigger-observed"
     return {
         **result,
-        "state": "trigger-observed" if decline_pct <= -trigger_pct else "no-trigger-observed",
+        "state": state,
         "metrics": {
             "lookbackBars": lookback,
             "latestClose": latest_close,
             "rollingPeakClose": peak_close,
+            "windowLowClose": window_low_close,
             "declineFromRollingPeakPct": decline_pct,
+            "maximumObservedDeclinePct": maximum_observed_decline_pct,
             "dropTriggerPct": trigger_pct,
         },
     }
