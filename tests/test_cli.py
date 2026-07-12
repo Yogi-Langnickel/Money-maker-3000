@@ -8,6 +8,7 @@ from pathlib import Path
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
 QQQ_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "qqq-daily.csv"
+SLOW_TREND_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-slow-trend-202-daily.csv"
 
 
 class CliTests(unittest.TestCase):
@@ -47,6 +48,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
         self.assertEqual(payload["periodDiagnostics"]["periods"][0]["period"], "24h")
         self.assertEqual(payload["scenarioSummaries"][0]["allocation"]["providerDemoBalance"], "redacted")
+
+    def test_backtest_cli_proves_default_slow_trend_window(self):
+        result = self.run_cli(
+            "backtest",
+            "--history-csv",
+            str(SLOW_TREND_FIXTURE_PATH),
+            "--symbol",
+            "SPY",
+            "--strategy",
+            "slow-trend-allocation",
+            "--market",
+            "US_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--started-at",
+            "2025-10-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        diagnostics = payload["strategyHistoryDiagnostics"]
+        serialized = json.dumps(payload).lower()
+        self.assertEqual(payload["metadata"]["rowCount"], 202)
+        self.assertEqual(payload["metadata"]["firstDate"], "2025-01-02")
+        self.assertEqual(payload["metadata"]["lastDate"], "2025-10-10")
+        self.assertEqual(
+            payload["metadata"]["inputSha256"],
+            "ecaec707c5bc6dccc05f0ed5b52f1110ba08a0e0431c59e0d9223baf9ae546d9",
+        )
+        self.assertEqual(diagnostics["state"], "trend-confirmed")
+        self.assertEqual(diagnostics["parameterState"], "valid")
+        self.assertEqual(diagnostics["requiredBarCount"], 202)
+        self.assertEqual(diagnostics["metrics"]["shortLookbackBars"], 50)
+        self.assertEqual(diagnostics["metrics"]["longLookbackBars"], 200)
+        self.assertEqual(diagnostics["metrics"]["confirmationMatches"], 3)
+        self.assertEqual(diagnostics["candidateIntent"], "skip")
+        self.assertEqual(diagnostics["providerCalls"], "blocked")
+        self.assertEqual(diagnostics["executionRoutes"], "absent")
+        for forbidden in ("accountid", "positionid", "orderid", "apikey", "userkey", "winrate", "sharpe"):
+            self.assertNotIn(forbidden, serialized)
 
     def test_backtest_cli_accepts_allowlisted_strategy_parameter_json(self):
         result = self.run_cli(
