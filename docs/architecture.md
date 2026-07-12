@@ -18,6 +18,10 @@ The runtime package lives under `src/money_maker_3000/`.
 - `risk.py`: pure fail-closed risk gate.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
   accumulator plus selected-period market diagnostics for dashboard charting.
+- `history_signals.py`: deterministic rolling-window observations for the
+  predefined volatility-band and slow-trend strategies. It emits no orders,
+  recommendations, profitability claims, or provider/account data and fails
+  closed on malformed history or parameters.
 - `backtest.py`: `Iterable[Bar] -> Iterator[DecisionEvent] -> Summary`.
 - `readiness.py`: offline backtest-readiness gates for strategy registry,
   allocation policy, run-mode policy, provider boundary, and fixture coverage.
