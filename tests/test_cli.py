@@ -226,6 +226,37 @@ class CliTests(unittest.TestCase):
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertEqual(payload["summary"]["strategyHistoryStateHistogram"], {"insufficient-history": 1})
 
+    def test_fixture_batch_cli_reports_rebalance_history_without_intent(self):
+        result = self.run_cli(
+            "fixture-batch",
+            "--fixture",
+            f"SPY={FIXTURE_PATH}",
+            "--fixture",
+            f"GLD={GLD_FIXTURE_PATH}",
+            "--strategy",
+            "threshold-rebalance",
+            "--strategy-params-json",
+            (
+                '{"targetWeights":{"SPY":0.7,"GLD":0.3},"rebalanceThresholdPct":5,'
+                '"maxOrderUsd":250,"minCashReserveUsd":100,"maxOpenPositions":3}'
+            ),
+            "--started-at",
+            "2026-05-15T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        diagnostics = payload["rebalanceHistoryDiagnostics"]
+        self.assertEqual(diagnostics["state"], "available")
+        self.assertEqual(diagnostics["candidateIntent"], "skip")
+        self.assertEqual(diagnostics["providerCalls"], "blocked")
+        self.assertEqual(diagnostics["portfolioHoldings"], "absent")
+        self.assertEqual(diagnostics["executionRoutes"], "absent")
+        self.assertIn(
+            diagnostics["metrics"]["thresholdState"],
+            {"historical-drift-exceeded", "within-historical-threshold"},
+        )
+
     def test_readiness_cli_reports_backtest_ready_without_provider_calls(self):
         result = self.run_cli(
             "readiness",

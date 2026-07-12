@@ -58,6 +58,11 @@ Updated: 2026-06-17
 - Fixture-batch diagnostics preserve validated per-symbol strategy-history
   observations and aggregate only a state histogram. Readiness diagnostics
   expose the state and fail-closed boundary fields without copying raw metrics.
+- All-threshold-rebalance fixture batches now emit deterministic historical
+  relative-weight drift when target symbols and date windows match exactly.
+  Missing targets, mixed windows, malformed prices, or altered provider safety
+  fields fail closed. The DTO declares holdings/account data absent and keeps
+  candidate intent `skip`.
 - Offline fixture batch diagnostics can run multiple fixture files from a JSON
   manifest or repeated `SYMBOL=PATH` CLI entries, aggregate coverage/veto
   summaries, and emit per-symbol SHA-256/parser metadata/period diagnostics

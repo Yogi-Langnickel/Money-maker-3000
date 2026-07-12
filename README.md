@@ -77,6 +77,13 @@ Fixture-batch output retains these per-symbol states and emits only a state
 histogram in its summary. Readiness output carries the same redacted boundary
 fields without raw metric payloads.
 
+When every batch entry uses `threshold-rebalance` with the same target weights
+and an identical historical window, the batch also emits
+`rebalanceHistoryDiagnostics`. It normalizes target weights by relative offline
+price change and reports historical weight drift only. It uses no portfolio
+holdings or account balance, always keeps candidate intent `skip`, and fails
+closed on incomplete or mismatched windows.
+
 `--mode execute`, `--mode trade`, and `--mode trading` are rejected before any
 work runs.
 
