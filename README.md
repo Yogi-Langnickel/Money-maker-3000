@@ -101,6 +101,18 @@ contract source and contains only redacted strategy/configuration metadata.
 After an intentional contract change, regenerate it with `--write`. CI fails
 when the committed artifact drifts from `contracts.py`.
 
+Canonical fixture provenance:
+
+```sh
+PYTHONPATH=src python3.13 -m money_maker_3000.fixture_provenance --check
+```
+
+`contracts/market-history-fixture-provenance.json` inventories every committed
+CSV fixture and pins its classification, SHA-256, symbol, row count, and source
+label. CI rejects unlisted, malformed, symlinked, relabeled, or byte-drifted
+fixtures. An observed-data classification additionally requires explicit
+source, license, attribution, and redistribution evidence.
+
 Ledger report:
 
 ```sh
@@ -123,6 +135,7 @@ PYTHONPATH=src python3.13 -m money_maker_3000.cli --profile profile.txt backtest
 ```sh
 PYTHONPYCACHEPREFIX=.pycache python3.13 -m compileall src tests
 PYTHONPATH=src python3.13 -m unittest discover tests
+PYTHONPATH=src python3.13 -m money_maker_3000.fixture_provenance --check
 ```
 
 GitHub Actions runs the same compile and standard-library test gates on Python

@@ -168,7 +168,7 @@ Order preview recommendation:
 The first provider-adjacent slice is offline fixture data, not live eToro fetch
 code.
 
-Current fixture coverage includes `SPY`, `GLD`, and `QQQ` daily public-test
+Current fixture coverage includes `SPY`, `GLD`, and `QQQ` daily synthetic short
 CSVs, checksum-pinned synthetic volatility scenario windows, and a
 checksum-pinned synthetic `VAS` AU ETF instrument-contract window. None of the
 synthetic fixtures may be represented as observed market data. The
@@ -189,6 +189,11 @@ Rules:
 - Expose iterator-based bar parsing.
 - Use single-pass reducers for summaries.
 - Commit only tiny public market fixtures.
+- List every committed CSV in the generated fixture-provenance artifact; CI
+  must reject unlisted files, byte/source/row drift, and unsupported observed
+  data claims.
+- Do not classify a fixture as observed market data without explicit source,
+  license, attribution, and redistribution evidence.
 - Keep larger generated downloads under ignored local data paths.
 - Do not include account IDs, balances, holdings, position IDs, order IDs,
   transaction history, provider user keys, raw account payloads, or screenshots.

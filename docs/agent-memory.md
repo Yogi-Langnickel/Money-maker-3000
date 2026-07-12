@@ -40,8 +40,8 @@ Updated: 2026-07-13
   state they are not evaluated against real PnL.
 - `market_history.py` provides stdlib streaming CSV/date validation and
   single-pass history summaries.
-- Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ` daily
-  public-test fixtures. Historical backtest reports include
+- Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ`
+  daily synthetic short fixtures. Historical backtest reports include
   `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market
   change diagnostics for dashboard portfolio charting. The DTO explicitly
   blocks provider calls, account data, and execution, and carries
@@ -113,6 +113,12 @@ Updated: 2026-07-13
 - Historical fixture reports cap materialized period-diagnostics input at
   `maxFixtureRows` with a default of 10,000 rows. Larger files must opt in
   explicitly and still remain offline fixture inputs only.
+- `fixture_provenance.py` generates and checks the canonical
+  `contracts/market-history-fixture-provenance.json` inventory. Every committed
+  CSV must be listed with an exact SHA-256, classification, symbol, row count,
+  and source label. CI rejects unlisted, malformed, symlinked, relabeled, or
+  drifted fixtures. Observed-data classification requires explicit source,
+  license, attribution, and redistribution evidence.
 - `ledger.py` writes/reads redacted local JSONL audit records with correlation
   IDs, strategy version, config hash, allocation IDs, risk decision, vetoes,
   data freshness, and provider call status. Appends use an exclusive sidecar
@@ -155,6 +161,9 @@ Updated: 2026-07-13
   record is rejected.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.contract_manifest --check`:
   verify the committed dashboard contract artifact matches `contracts.py`.
+- `PYTHONPATH=src python3.13 -m money_maker_3000.fixture_provenance --check`:
+  verify every committed market-history CSV and the generated provenance
+  artifact match the canonical inventory.
 
 ## Performance And Context Notes
 

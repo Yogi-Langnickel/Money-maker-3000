@@ -17,7 +17,7 @@ def bars_from_closes(closes: list[float]) -> list[Bar]:
             low=close,
             close=close,
             volume=1000.0,
-            source="public-test-fixture",
+            source="synthetic-test-fixture",
         )
         for index, close in enumerate(closes)
     ]
