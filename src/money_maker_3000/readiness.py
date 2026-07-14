@@ -261,6 +261,18 @@ def _fixture_readiness_diagnostic(
             "accountData": report["strategyHistoryDiagnostics"]["accountData"],
             "executionRoutes": report["strategyHistoryDiagnostics"]["executionRoutes"],
             "candidateIntent": report["strategyHistoryDiagnostics"]["candidateIntent"],
+            "walkForward": {
+                "dtoVersion": report["strategyHistoryDiagnostics"]["walkForward"]["dtoVersion"],
+                "state": report["strategyHistoryDiagnostics"]["walkForward"]["state"],
+                "eligibleObservationCount": report["strategyHistoryDiagnostics"]["walkForward"][
+                    "eligibleObservationCount"
+                ],
+                "transitionCount": report["strategyHistoryDiagnostics"]["walkForward"]["transitionCount"],
+                "providerCalls": report["strategyHistoryDiagnostics"]["walkForward"]["providerCalls"],
+                "accountData": report["strategyHistoryDiagnostics"]["walkForward"]["accountData"],
+                "executionRoutes": report["strategyHistoryDiagnostics"]["walkForward"]["executionRoutes"],
+                "candidateIntent": report["strategyHistoryDiagnostics"]["walkForward"]["candidateIntent"],
+            },
         },
         "errors": [],
         "warnings": [],

@@ -52,6 +52,12 @@ candidate-order context, but the intent remains `skip`, provider calls stay
 blocked, execution routes stay absent, and output carries no profitability
 claim.
 
+`strategy-history-diagnostics.v2` adds a walk-forward state-coverage summary
+for volatility-band and slow-trend fixtures. It evaluates every eligible
+historical endpoint and returns only observation counts, state counts,
+transition count, and date coverage. It does not create orders,
+recommendations, return metrics, or execution-quality claims.
+
 The `readiness` command is the operator gate before offline fixture diagnostics.
 It reports only offline-backtest readiness and suggests safe `backtest`
 commands for passing fixtures. It must not be interpreted as demo/live trading
