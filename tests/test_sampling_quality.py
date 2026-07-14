@@ -22,7 +22,14 @@ class SamplingQualityTests(unittest.TestCase):
         self.assertEqual(quality["observedWeekdayCount"], 1)
         self.assertEqual(quality["observedWeekendCount"], 0)
         self.assertEqual(quality["maximumCalendarGapDays"], 0)
-        self.assertIsNone(sampling_quality_warning(quality["state"]))
+        self.assertIsNone(sampling_quality_warning(quality))
+
+    def test_single_weekend_observation_stays_insufficient_and_warns(self):
+        quality = build_sampling_quality([bar("2026-05-09")])
+
+        self.assertEqual(quality["state"], "insufficient-history")
+        self.assertEqual(quality["observedWeekendCount"], 1)
+        self.assertIn("exchange-calendar review", sampling_quality_warning(quality))
 
     def test_friday_to_monday_is_covered_on_weekday_grid(self):
         quality = build_sampling_quality([bar("2026-05-08"), bar("2026-05-11")])
@@ -31,7 +38,7 @@ class SamplingQualityTests(unittest.TestCase):
         self.assertEqual(quality["potentialMissingWeekdayCount"], 0)
         self.assertEqual(quality["intervalsOverThreeCalendarDays"], 0)
         self.assertEqual(quality["maximumCalendarGapDays"], 3)
-        self.assertIsNone(sampling_quality_warning(quality["state"]))
+        self.assertIsNone(sampling_quality_warning(quality))
 
     def test_holiday_like_gap_is_potential_not_proven_missing_session(self):
         quality = build_sampling_quality([bar("2026-05-08"), bar("2026-05-12")])
@@ -41,7 +48,7 @@ class SamplingQualityTests(unittest.TestCase):
         self.assertEqual(quality["intervalsOverThreeCalendarDays"], 1)
         self.assertEqual(quality["maximumCalendarGapDays"], 4)
         self.assertIn("not proof of missing market sessions", quality["weekdayGapCaveat"])
-        self.assertIn("exchange-calendar review", sampling_quality_warning(quality["state"]))
+        self.assertIn("exchange-calendar review", sampling_quality_warning(quality))
 
     def test_weekend_observation_is_explicit_without_weekday_gap(self):
         quality = build_sampling_quality(
@@ -52,7 +59,7 @@ class SamplingQualityTests(unittest.TestCase):
         self.assertEqual(quality["observedWeekdayCount"], 2)
         self.assertEqual(quality["observedWeekendCount"], 1)
         self.assertEqual(quality["potentialMissingWeekdayCount"], 0)
-        self.assertIn("exchange-calendar review", sampling_quality_warning(quality["state"]))
+        self.assertIn("exchange-calendar review", sampling_quality_warning(quality))
 
     def test_weekend_observation_and_weekday_gap_are_mixed_irregular_sampling(self):
         quality = build_sampling_quality(
@@ -64,7 +71,18 @@ class SamplingQualityTests(unittest.TestCase):
         self.assertEqual(quality["potentialMissingWeekdayCount"], 1)
         self.assertEqual(quality["intervalsOverThreeCalendarDays"], 0)
         self.assertEqual(quality["maximumCalendarGapDays"], 3)
-        self.assertIn("exchange-calendar review", sampling_quality_warning(quality["state"]))
+        self.assertIn("exchange-calendar review", sampling_quality_warning(quality))
+
+    def test_warning_helper_rejects_malformed_state_and_counter_evidence(self):
+        quality = build_sampling_quality([bar("2026-05-11")])
+
+        with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
+            sampling_quality_warning("insufficient-history")
+
+        malformed = dict(quality)
+        malformed["observedWeekendCount"] = 1
+        with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
+            sampling_quality_warning(malformed)
 
     def test_far_apart_dates_use_bounded_interval_arithmetic(self):
         quality = build_sampling_quality([bar("1900-01-01"), bar("9999-12-31")])

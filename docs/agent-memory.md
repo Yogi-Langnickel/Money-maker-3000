@@ -45,9 +45,10 @@ Updated: 2026-07-15
   weekday/weekend observations, potential weekdays strictly between adjacent
   observations, gaps over three calendar days, and the maximum calendar gap.
   Its weekday grid is not an exchange calendar, so potential gaps are never
-  claimed as proof of missing market sessions. Readiness surfaces anomalous
-  states as exchange-calendar-review warnings without changing error-based
-  readiness; its projection omits observation dates.
+  claimed as proof of missing market sessions. Readiness derives warnings from
+  the validated gap/weekend counters, so even one weekend observation warns
+  while retaining the `insufficient-history` state. Warnings do not change
+  error-based readiness, and the projection omits observation dates.
 - Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ`
   daily synthetic short fixtures. Historical backtest reports include
   `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market

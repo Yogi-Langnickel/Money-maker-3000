@@ -560,6 +560,40 @@ class RiskAndBacktestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate offline fixture symbol"):
             build_offline_fixture_batch_diagnostics(reports=[report, report])
 
+    def test_offline_fixture_batch_aggregates_mixed_sampling_quality_states(self):
+        reports = []
+        cases = (
+            ("SPY", ("2026-05-08", "2026-05-11")),
+            ("GLD", ("2026-05-08", "2026-05-09")),
+            ("QQQ", ("2026-05-08", "2026-05-12")),
+        )
+        for symbol, dates in cases:
+            reports.append(
+                build_historical_fixture_backtest(
+                    bars=[
+                        Bar(symbol, observed, 100.0, 100.0, 100.0, 100.0, 1000.0, "synthetic-test-fixture")
+                        for observed in dates
+                    ],
+                    selected_instrument={
+                        "symbol": symbol,
+                        "market": "US_EQUITIES",
+                        "instrumentClass": "ETF",
+                    },
+                    started_at=datetime.fromisoformat("2026-05-13T00:00:00+00:00"),
+                )
+            )
+
+        batch = build_offline_fixture_batch_diagnostics(reports=reports)
+
+        self.assertEqual(
+            batch["summary"]["samplingQualityStateHistogram"],
+            {
+                "weekday-grid-covered": 1,
+                "non-weekday-observations": 1,
+                "potential-weekday-gaps": 1,
+            },
+        )
+
     def test_offline_fixture_batch_rejects_unsafe_strategy_history_diagnostics(self):
         with FIXTURE_PATH.open("r", encoding="utf-8", newline="") as source:
             report = build_historical_fixture_backtest(

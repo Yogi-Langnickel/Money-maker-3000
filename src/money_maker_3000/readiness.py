@@ -229,7 +229,7 @@ def _fixture_readiness_diagnostic(
         return _fixture_error(symbol, spec, [str(exc)])
 
     sampling_quality = report["samplingQuality"]
-    sampling_warning = sampling_quality_warning(str(sampling_quality["state"]))
+    sampling_warning = sampling_quality_warning(sampling_quality)
     return {
         "symbol": symbol,
         "ok": True,

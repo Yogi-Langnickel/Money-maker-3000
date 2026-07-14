@@ -70,8 +70,9 @@ potential intervening weekdays, and gap counts without exposing prices,
 returns, PnL, provider/account data, execution routes/actions, or
 recommendations. Potential weekday gaps are not proof of missing market
 sessions because holidays and exchange calendars are not modeled. Readiness
-emits an exchange-calendar-review warning for anomalous states while remaining
-governed by actual errors.
+emits an exchange-calendar-review warning whenever validated gap/weekend
+counters are nonzero, including a single weekend observation whose state remains
+`insufficient-history`, while readiness remains governed by actual errors.
 
 The `readiness` command is the operator gate before offline fixture diagnostics.
 It reports only offline-backtest readiness and suggests safe `backtest`

@@ -26,10 +26,8 @@ from money_maker_3000.market_history import (
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, assess_data_freshness
 from money_maker_3000.rebalance_history import build_rebalance_history_diagnostics
 from money_maker_3000.sampling_quality import (
-    CALENDAR_BASIS,
-    SAMPLING_QUALITY_VERSION,
-    WEEKDAY_GAP_CAVEAT,
     build_sampling_quality,
+    validated_sampling_quality,
 )
 
 DEFAULT_SCENARIOS = (
@@ -646,84 +644,10 @@ def _merge_histogram(target: dict[str, int], source: dict[str, int]) -> None:
 
 
 def _validated_sampling_quality(value: Any, *, canonical: dict[str, object]) -> dict[str, object]:
-    ordered_keys = (
-        "dtoVersion",
-        "state",
-        "observationCount",
-        "intervalCount",
-        "firstDate",
-        "lastDate",
-        "calendarSpanDays",
-        "observedWeekdayCount",
-        "observedWeekendCount",
-        "potentialMissingWeekdayCount",
-        "intervalsOverThreeCalendarDays",
-        "maximumCalendarGapDays",
-        "calendarBasis",
-        "weekdayGapCaveat",
-        "providerCalls",
-        "accountData",
-        "execution",
-        "candidateIntent",
-        "claimBoundary",
-    )
-    if not isinstance(value, dict) or set(value) != set(ordered_keys):
-        raise ValueError("offline fixture batch sampling quality is invalid")
-    integer_keys = (
-        "observationCount",
-        "intervalCount",
-        "calendarSpanDays",
-        "observedWeekdayCount",
-        "observedWeekendCount",
-        "potentialMissingWeekdayCount",
-        "intervalsOverThreeCalendarDays",
-        "maximumCalendarGapDays",
-    )
-    if (
-        value["dtoVersion"] != SAMPLING_QUALITY_VERSION
-        or value["state"]
-        not in {
-            "insufficient-history",
-            "weekday-grid-covered",
-            "potential-weekday-gaps",
-            "non-weekday-observations",
-            "mixed-irregular-sampling",
-        }
-        or any(
-            not isinstance(value[key], int) or isinstance(value[key], bool) or value[key] < 0
-            for key in integer_keys
-        )
-        or value["intervalCount"] != max(0, value["observationCount"] - 1)
-        or value["observedWeekdayCount"] + value["observedWeekendCount"] != value["observationCount"]
-        or value["intervalsOverThreeCalendarDays"] > value["intervalCount"]
-        or value["calendarBasis"] != CALENDAR_BASIS
-        or value["weekdayGapCaveat"] != WEEKDAY_GAP_CAVEAT
-        or value["providerCalls"] != "blocked"
-        or value["accountData"] != "absent"
-        or value["execution"] != "blocked"
-        or value["candidateIntent"] != "skip"
-        or value["claimBoundary"] != "sampling-coverage-only-no-financial-or-session-completeness-claim"
-    ):
-        raise ValueError("offline fixture batch sampling quality is invalid")
-    first_date = value["firstDate"]
-    last_date = value["lastDate"]
-    if value["observationCount"] == 0:
-        if first_date is not None or last_date is not None or value["calendarSpanDays"] != 0:
-            raise ValueError("offline fixture batch sampling quality is invalid")
-    else:
-        try:
-            parsed_first = date.fromisoformat(first_date)
-            parsed_last = date.fromisoformat(last_date)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("offline fixture batch sampling quality is invalid") from exc
-        if (
-            parsed_first.isoformat() != first_date
-            or parsed_last.isoformat() != last_date
-            or parsed_first > parsed_last
-            or (parsed_last - parsed_first).days != value["calendarSpanDays"]
-        ):
-            raise ValueError("offline fixture batch sampling quality is invalid")
-    validated = {key: value[key] for key in ordered_keys}
+    try:
+        validated = validated_sampling_quality(value)
+    except ValueError as exc:
+        raise ValueError("offline fixture batch sampling quality is invalid") from exc
     if validated != canonical:
         raise ValueError("offline fixture batch sampling quality is invalid")
     return validated

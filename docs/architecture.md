@@ -171,7 +171,9 @@ safe for diagnostics. The readiness scope is explicitly
 `offline-backtest-only`; provider calls remain blocked, execution routes remain
 absent, demo/live execution remains blocked, and account data remains absent.
 Sampling anomalies are warnings that require exchange-calendar review; they do
-not block readiness and do not prove that any market session is missing.
+not block readiness and do not prove that any market session is missing. The
+warning derives from validated counters, so a single weekend observation warns
+without replacing its `insufficient-history` state.
 
 Backtest output is diagnostics only: coverage, veto counts, config errors,
 cadence/risk gate behavior, and fixture source/date coverage. It must not

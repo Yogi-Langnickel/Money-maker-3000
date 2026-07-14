@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Iterable
+from typing import Any, Iterable
 
 from money_maker_3000.market_history import Bar
 
@@ -11,11 +11,44 @@ WEEKDAY_GAP_CAVEAT = (
     "potential weekday gaps are not proof of missing market sessions because holidays and exchange calendars "
     "are not modeled"
 )
-ANOMALY_STATES = {
+SAMPLING_QUALITY_KEYS = (
+    "dtoVersion",
+    "state",
+    "observationCount",
+    "intervalCount",
+    "firstDate",
+    "lastDate",
+    "calendarSpanDays",
+    "observedWeekdayCount",
+    "observedWeekendCount",
+    "potentialMissingWeekdayCount",
+    "intervalsOverThreeCalendarDays",
+    "maximumCalendarGapDays",
+    "calendarBasis",
+    "weekdayGapCaveat",
+    "providerCalls",
+    "accountData",
+    "execution",
+    "candidateIntent",
+    "claimBoundary",
+)
+SAMPLING_STATES = {
+    "insufficient-history",
+    "weekday-grid-covered",
     "potential-weekday-gaps",
     "non-weekday-observations",
     "mixed-irregular-sampling",
 }
+INTEGER_KEYS = (
+    "observationCount",
+    "intervalCount",
+    "calendarSpanDays",
+    "observedWeekdayCount",
+    "observedWeekendCount",
+    "potentialMissingWeekdayCount",
+    "intervalsOverThreeCalendarDays",
+    "maximumCalendarGapDays",
+)
 
 
 def _weekdays_strictly_between(start: date, end: date) -> int:
@@ -92,10 +125,80 @@ def build_sampling_quality(bars: Iterable[Bar]) -> dict[str, object]:
     }
 
 
-def sampling_quality_warning(state: str) -> str | None:
-    if state not in ANOMALY_STATES:
+def validated_sampling_quality(value: Any) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != set(SAMPLING_QUALITY_KEYS):
+        raise ValueError("sampling quality is invalid")
+    if (
+        value["dtoVersion"] != SAMPLING_QUALITY_VERSION
+        or value["state"] not in SAMPLING_STATES
+        or any(
+            not isinstance(value[key], int) or isinstance(value[key], bool) or value[key] < 0
+            for key in INTEGER_KEYS
+        )
+        or value["intervalCount"] != max(0, value["observationCount"] - 1)
+        or value["observedWeekdayCount"] + value["observedWeekendCount"] != value["observationCount"]
+        or value["intervalsOverThreeCalendarDays"] > value["intervalCount"]
+        or value["calendarBasis"] != CALENDAR_BASIS
+        or value["weekdayGapCaveat"] != WEEKDAY_GAP_CAVEAT
+        or value["providerCalls"] != "blocked"
+        or value["accountData"] != "absent"
+        or value["execution"] != "blocked"
+        or value["candidateIntent"] != "skip"
+        or value["claimBoundary"] != "sampling-coverage-only-no-financial-or-session-completeness-claim"
+    ):
+        raise ValueError("sampling quality is invalid")
+
+    observation_count = value["observationCount"]
+    interval_count = value["intervalCount"]
+    first_date = value["firstDate"]
+    last_date = value["lastDate"]
+    if observation_count == 0:
+        if first_date is not None or last_date is not None or value["calendarSpanDays"] != 0:
+            raise ValueError("sampling quality is invalid")
+    else:
+        try:
+            parsed_first = date.fromisoformat(first_date)
+            parsed_last = date.fromisoformat(last_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("sampling quality is invalid") from exc
+        if (
+            parsed_first.isoformat() != first_date
+            or parsed_last.isoformat() != last_date
+            or parsed_first > parsed_last
+            or (parsed_last - parsed_first).days != value["calendarSpanDays"]
+        ):
+            raise ValueError("sampling quality is invalid")
+    if interval_count == 0:
+        if (
+            value["potentialMissingWeekdayCount"] != 0
+            or value["intervalsOverThreeCalendarDays"] != 0
+            or value["maximumCalendarGapDays"] != 0
+        ):
+            raise ValueError("sampling quality is invalid")
+    elif not 1 <= value["maximumCalendarGapDays"] <= value["calendarSpanDays"]:
+        raise ValueError("sampling quality is invalid")
+
+    if observation_count < 2:
+        expected_state = "insufficient-history"
+    elif value["potentialMissingWeekdayCount"] and value["observedWeekendCount"]:
+        expected_state = "mixed-irregular-sampling"
+    elif value["potentialMissingWeekdayCount"]:
+        expected_state = "potential-weekday-gaps"
+    elif value["observedWeekendCount"]:
+        expected_state = "non-weekday-observations"
+    else:
+        expected_state = "weekday-grid-covered"
+    if value["state"] != expected_state:
+        raise ValueError("sampling quality is invalid")
+
+    return {key: value[key] for key in SAMPLING_QUALITY_KEYS}
+
+
+def sampling_quality_warning(value: Any) -> str | None:
+    quality = validated_sampling_quality(value)
+    if not quality["observedWeekendCount"] and not quality["potentialMissingWeekdayCount"]:
         return None
     return (
-        f"sampling quality state {state} requires exchange-calendar review; "
+        f"sampling quality state {quality['state']} requires exchange-calendar review; "
         "potential weekday gaps are not proof of missing market sessions"
     )
