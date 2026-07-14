@@ -57,7 +57,10 @@ for volatility-band and slow-trend fixtures. It evaluates every eligible
 historical endpoint and returns only observation counts, state counts,
 transition count, date coverage, and up to five nonempty balanced chronological
 folds. Fold output is limited to index, observation/date coverage, state counts,
-and transition count. It does not create orders,
+and transition count. Offline batch validation recomputes the canonical folds
+from the report's authoritative historical bars, binding every fold date and
+transition to the source observations and the terminal strategy state. It does
+not create orders,
 recommendations, return metrics, or execution-quality claims.
 
 The `readiness` command is the operator gate before offline fixture diagnostics.

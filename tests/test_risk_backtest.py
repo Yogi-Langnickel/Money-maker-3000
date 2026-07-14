@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from money_maker_3000.backtest import (
@@ -596,6 +596,11 @@ class RiskAndBacktestTests(unittest.TestCase):
             build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
         unsafe = deepcopy(volatility_report)
+        unsafe["strategyHistoryDiagnostics"]["metrics"]["dropTriggerPct"] = 2.5
+        with self.assertRaisesRegex(ValueError, "strategy history diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(volatility_report)
         unsafe["strategyHistoryDiagnostics"]["walkForward"]["foldCount"] = 0
         unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"] = []
         with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
@@ -621,9 +626,18 @@ class RiskAndBacktestTests(unittest.TestCase):
     def test_offline_fixture_batch_rejects_tampered_multi_fold_walk_forward_diagnostics(self):
         report = build_historical_fixture_backtest(
             bars=[
-                Bar("SPY", f"2026-05-{7 + index:02d}", close, close, close, close, 1000.0, "synthetic-test-fixture")
+                Bar(
+                    "SPY",
+                    (datetime(2026, 5, 7) + timedelta(days=index * 2)).date().isoformat(),
+                    close,
+                    close,
+                    close,
+                    close,
+                    1000.0,
+                    "synthetic-test-fixture",
+                )
                 for index, close in enumerate(
-                    [100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 92.0, 97.0, 100.0, 101.0]
+                    [100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 92.0, 97.0, 100.0, 101.0, 102.0]
                 )
             ],
             strategy_id="volatility-band-accumulator",
@@ -656,9 +670,64 @@ class RiskAndBacktestTests(unittest.TestCase):
             build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
         unsafe = deepcopy(report)
-        unsafe["strategyHistoryDiagnostics"]["walkForward"]["transitionCount"] = 0
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][1]["firstObservationDate"] = (
+            datetime.fromisoformat(walk_forward["folds"][1]["firstObservationDate"])
+            - timedelta(days=1)
+        ).date().isoformat()
         with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
             build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["transitionCount"] += 1
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe_walk_forward = unsafe["strategyHistoryDiagnostics"]["walkForward"]
+        unsafe_walk_forward["folds"][-1]["stateCounts"] = {"recovery-observed": 1}
+        unsafe_walk_forward["stateCounts"] = {
+            "no-trigger-observed": 1,
+            "recovery-observed": 3,
+            "trigger-observed": 3,
+        }
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe_walk_forward = unsafe["strategyHistoryDiagnostics"]["walkForward"]
+        self.assertEqual(unsafe_walk_forward["folds"][1]["stateCounts"], {"trigger-observed": 2})
+        unsafe_walk_forward["folds"][1]["transitionCount"] = 1
+        unsafe_walk_forward["transitionCount"] += 1
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+    def test_offline_fixture_batch_preserves_invalid_defaulted_parameter_boundary(self):
+        report = build_historical_fixture_backtest(
+            bars=[
+                Bar(
+                    "SPY",
+                    f"2026-05-{index + 1:02d}",
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1000.0,
+                    "synthetic-test-fixture",
+                )
+                for index in range(20)
+            ],
+            strategy_id="volatility-band-accumulator",
+            selected_instrument=SELECTED_SPY,
+            strategy_parameters={"lookbackDays": "bad", "dropTriggerPct": float("nan")},
+            started_at=datetime.fromisoformat("2026-05-21T00:00:00+00:00"),
+        )
+
+        batch = build_offline_fixture_batch_diagnostics(reports=[report])
+
+        diagnostics = batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]
+        self.assertEqual(diagnostics["parameterState"], "invalid-defaulted")
+        self.assertEqual(diagnostics["requiredBarCount"], 20)
+        self.assertEqual(diagnostics["walkForward"]["foldCount"], 1)
 
     def test_market_history_parser_rejects_sensitive_columns_and_bad_rows(self):
         with self.assertRaisesRegex(ValueError, "account-linked columns"):

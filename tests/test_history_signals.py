@@ -154,6 +154,33 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(walk_forward["folds"][-1]["firstObservationDate"], "2025-03-12")
         self.assertEqual(walk_forward["folds"][-1]["lastObservationDate"], "2025-03-13")
 
+    def test_walk_forward_fold_partition_is_balanced_across_threshold_counts(self):
+        for observation_count in range(1, 13):
+            with self.subTest(observation_count=observation_count):
+                diagnostics = build_strategy_history_diagnostics(
+                    bars_from_closes([100.0] * (observation_count + 4)),
+                    strategy_id="volatility-band-accumulator",
+                    strategy_parameters={"lookbackDays": 5, "dropTriggerPct": 3.0},
+                )
+                walk_forward = diagnostics["walkForward"]
+                fold_count = min(5, observation_count)
+                base_size, extra = divmod(observation_count, fold_count)
+                expected_sizes = [base_size + (1 if index < extra else 0) for index in range(fold_count)]
+
+                self.assertEqual(walk_forward["eligibleObservationCount"], observation_count)
+                self.assertEqual(walk_forward["foldCount"], fold_count)
+                self.assertEqual(
+                    [fold["observationCount"] for fold in walk_forward["folds"]],
+                    expected_sizes,
+                )
+                self.assertTrue(all(size > 0 for size in expected_sizes))
+                self.assertLessEqual(max(expected_sizes) - min(expected_sizes), 1)
+                self.assertEqual(walk_forward["folds"][0]["firstObservationDate"], "2025-01-05")
+                self.assertEqual(
+                    walk_forward["folds"][-1]["lastObservationDate"],
+                    (date(2025, 1, 1) + timedelta(days=observation_count + 3)).isoformat(),
+                )
+
     def test_diagnostics_are_redacted_and_diagnostics_only(self):
         diagnostics = build_strategy_history_diagnostics(
             bars_from_closes([100.0] * 5),

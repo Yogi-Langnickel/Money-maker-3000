@@ -383,6 +383,91 @@ def build_historical_fixture_backtest(
     }
 
 
+def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    metadata = report.get("metadata")
+    history = report.get("history")
+    runs = report.get("runs")
+    scenario_summaries = report.get("scenarioSummaries")
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(history, dict)
+        or not isinstance(runs, list)
+        or not runs
+        or not isinstance(scenario_summaries, list)
+        or len(scenario_summaries) != len(runs)
+    ):
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    strategy_id = metadata.get("strategyId")
+    if strategy_id not in SIMULATION_STRATEGY_PARAMETER_SCHEMAS:
+        raise ValueError("offline fixture batch authoritative history is invalid")
+
+    expected_bar_keys = {"symbol", "date", "open", "high", "low", "close", "volume", "source"}
+    bars: list[Bar] = []
+    strategy_parameters: dict[str, Any] | None = None
+    for run in runs:
+        intent = run.get("intentDiagnostics") if isinstance(run, dict) else None
+        bar = intent.get("bar") if isinstance(intent, dict) else None
+        parameters = intent.get("strategyParameters") if isinstance(intent, dict) else None
+        if (
+            not isinstance(intent, dict)
+            or intent.get("strategyId") != strategy_id
+            or not isinstance(bar, dict)
+            or set(bar) != expected_bar_keys
+            or not isinstance(parameters, dict)
+            or not isinstance(bar["symbol"], str)
+            or not isinstance(bar["date"], str)
+            or not isinstance(bar["source"], str)
+            or any(
+                isinstance(bar[key], bool)
+                or not isinstance(bar[key], (int, float))
+                or not math.isfinite(float(bar[key]))
+                for key in ("open", "high", "low", "close", "volume")
+            )
+        ):
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        if strategy_parameters is None:
+            strategy_parameters = parameters
+        elif parameters != strategy_parameters:
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        bars.append(Bar(**bar))
+
+    if (
+        len(bars) != metadata.get("rowCount")
+        or len(bars) != history.get("barCount")
+        or bars[0].symbol != history.get("symbol")
+        or bars[0].date != metadata.get("firstDate")
+        or bars[-1].date != metadata.get("lastDate")
+    ):
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    canonical = build_strategy_history_diagnostics(
+        bars,
+        strategy_id=strategy_id,
+        strategy_parameters=strategy_parameters,
+    )
+    if canonical["state"] == "invalid-history":
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    parameter_error_prefixes = (
+        "strategy parameter ",
+        "strategy parameters ",
+        "unsupported strategy parameters ",
+    )
+    parameter_states: set[str] = set()
+    for summary in scenario_summaries:
+        config = summary.get("config") if isinstance(summary, dict) else None
+        errors = config.get("errors") if isinstance(config, dict) else None
+        if not isinstance(errors, list) or any(not isinstance(error, str) for error in errors):
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        parameter_states.add(
+            "invalid-defaulted"
+            if any(error.startswith(parameter_error_prefixes) for error in errors)
+            else "valid"
+        )
+    if len(parameter_states) != 1:
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    canonical["parameterState"] = parameter_states.pop()
+    return canonical
+
+
 def build_offline_fixture_batch_diagnostics(
     *,
     reports: Iterable[dict[str, Any]],
@@ -413,7 +498,11 @@ def build_offline_fixture_batch_diagnostics(
         row_count = int(metadata["rowCount"])
         event_count = int(report["summary"]["eventCount"])
         blocked_count = int(report["summary"]["blockedCount"])
-        strategy_history = _validated_strategy_history_diagnostics(report.get("strategyHistoryDiagnostics"))
+        canonical_strategy_history = _canonical_strategy_history_from_report(report)
+        strategy_history = _validated_strategy_history_diagnostics(
+            report.get("strategyHistoryDiagnostics"),
+            canonical=canonical_strategy_history,
+        )
         total_rows += row_count
         total_events += event_count
         blocked_events += blocked_count
@@ -501,7 +590,7 @@ def _merge_histogram(target: dict[str, int], source: dict[str, int]) -> None:
         target[key] = target.get(key, 0) + int(value)
 
 
-def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
+def _validated_strategy_history_diagnostics(value: Any, *, canonical: dict[str, Any]) -> dict[str, Any]:
     ordered_keys = (
         "dtoVersion",
         "strategyId",
@@ -663,8 +752,9 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         bar_count=value["barCount"],
         required_bar_count=value["requiredBarCount"],
         latest_date=latest_date,
+        canonical=canonical["walkForward"],
     )
-    return {
+    validated = {
         key: (
             dict(metrics)
             if key == "metrics" and metrics is not None
@@ -674,6 +764,9 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         )
         for key in ordered_keys
     }
+    if validated != canonical:
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+    return validated
 
 
 def _validated_walk_forward_diagnostics(
@@ -684,6 +777,7 @@ def _validated_walk_forward_diagnostics(
     bar_count: int,
     required_bar_count: int,
     latest_date: str | None,
+    canonical: dict[str, Any],
 ) -> dict[str, Any]:
     keys = {
         "dtoVersion",
@@ -865,7 +959,7 @@ def _validated_walk_forward_diagnostics(
     elif folds:
         raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
 
-    return {
+    validated = {
         "dtoVersion": value["dtoVersion"],
         "providerCalls": "blocked",
         "accountData": "absent",
@@ -891,3 +985,6 @@ def _validated_walk_forward_diagnostics(
             for fold in folds
         ],
     }
+    if validated != canonical:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    return validated

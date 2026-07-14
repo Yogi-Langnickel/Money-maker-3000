@@ -59,6 +59,11 @@ Updated: 2026-07-15
   reports only fold index, observation/date coverage, state counts, and
   transition count. Candidate intent remains `skip`, provider calls are blocked,
   account data is absent, and no P/L or profitability claim is made.
+- Offline batch validation reconstructs canonical walk-forward diagnostics from
+  the historical bars retained in the report. Fold dates, state counts, within-
+  and cross-fold transitions, and the terminal strategy state must match that
+  authoritative reconstruction exactly; merely ordered ISO dates are not
+  accepted as observation evidence.
 - Volatility history distinguishes stable/no-trigger, active-decline trigger,
   and recovered-after-decline observations from the bounded offline window;
   every state remains a non-recommendation with candidate intent `skip`.
