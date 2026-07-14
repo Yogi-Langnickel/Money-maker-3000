@@ -54,7 +54,119 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["metadata"]["maxFixtureRows"], 10000)
         self.assertEqual(payload["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
         self.assertEqual(payload["periodDiagnostics"]["periods"][0]["period"], "24h")
+        self.assertEqual(payload["samplingQuality"]["dtoVersion"], "market-history-sampling-quality.v1")
+        self.assertEqual(payload["samplingQuality"]["state"], "weekday-grid-covered")
+        self.assertEqual(payload["samplingQuality"]["observationCount"], 3)
+        self.assertEqual(payload["samplingQuality"]["intervalCalendarDays"], [1, 1])
+        self.assertEqual(payload["samplingQuality"]["providerCalls"], "blocked")
+        self.assertEqual(payload["samplingQuality"]["accountData"], "absent")
+        self.assertEqual(payload["samplingQuality"]["execution"], "blocked")
         self.assertEqual(payload["scenarioSummaries"][0]["allocation"]["providerDemoBalance"], "redacted")
+
+    def test_readiness_cli_warns_on_potential_weekday_gap_without_blocking(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_path = Path(temp_dir) / "gap.csv"
+            fixture_path.write_text(
+                "symbol,date,open,high,low,close,volume,source\n"
+                "SPY,2026-05-08,100,100,100,100,1000,synthetic-test-fixture\n"
+                "SPY,2026-05-12,100,100,100,100,1000,synthetic-test-fixture\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "readiness",
+                "--fixture",
+                f"SPY={fixture_path}",
+                "--started-at",
+                "2026-05-13T00:00:00Z",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        fixture = payload["fixtureDiagnostics"][0]
+        sampling_quality = fixture["samplingQuality"]
+        offline_gate = next(gate for gate in payload["gates"] if gate["name"] == "offline-fixtures")
+
+        self.assertTrue(payload["ready"])
+        self.assertTrue(fixture["ok"])
+        self.assertEqual(sampling_quality["state"], "potential-weekday-gaps")
+        self.assertEqual(sampling_quality["potentialMissingWeekdayCount"], 1)
+        self.assertNotIn("firstDate", sampling_quality)
+        self.assertNotIn("lastDate", sampling_quality)
+        self.assertNotIn("intervalCalendarDays", sampling_quality)
+        self.assertNotIn("price", json.dumps(sampling_quality).lower())
+        self.assertEqual(len(fixture["warnings"]), 1)
+        self.assertIn("exchange-calendar review", fixture["warnings"][0])
+        self.assertIn("not proof of missing market sessions", fixture["warnings"][0])
+        self.assertEqual(offline_gate["errors"], [])
+        self.assertEqual(offline_gate["warnings"], [f"SPY: {fixture['warnings'][0]}"])
+
+    def test_readiness_cli_single_observation_warning_uses_weekend_counter(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            weekday_path = temp_path / "weekday.csv"
+            weekend_path = temp_path / "weekend.csv"
+            header = "symbol,date,open,high,low,close,volume,source\n"
+            weekday_path.write_text(
+                header + "SPY,2026-05-11,100,100,100,100,1000,synthetic-test-fixture\n",
+                encoding="utf-8",
+            )
+            weekend_path.write_text(
+                header + "SPY,2026-05-09,100,100,100,100,1000,synthetic-test-fixture\n",
+                encoding="utf-8",
+            )
+            weekday_result = self.run_cli(
+                "readiness",
+                "--fixture",
+                f"SPY={weekday_path}",
+                "--started-at",
+                "2026-05-13T00:00:00Z",
+            )
+            weekend_result = self.run_cli(
+                "readiness",
+                "--fixture",
+                f"SPY={weekend_path}",
+                "--started-at",
+                "2026-05-13T00:00:00Z",
+            )
+            duplicate_result = self.run_cli(
+                "readiness",
+                "--fixture",
+                f"SPY={weekend_path}",
+                "--fixture",
+                f"SPY={weekend_path}",
+                "--started-at",
+                "2026-05-13T00:00:00Z",
+            )
+
+        self.assertEqual(weekday_result.returncode, 0, weekday_result.stderr)
+        weekday = json.loads(weekday_result.stdout)
+        weekday_fixture = weekday["fixtureDiagnostics"][0]
+        weekday_gate = next(gate for gate in weekday["gates"] if gate["name"] == "offline-fixtures")
+        self.assertTrue(weekday["ready"])
+        self.assertEqual(weekday_fixture["samplingQuality"]["state"], "insufficient-history")
+        self.assertEqual(weekday_fixture["samplingQuality"]["observedWeekendCount"], 0)
+        self.assertEqual(weekday_fixture["warnings"], [])
+        self.assertEqual(weekday_gate["warnings"], [])
+
+        self.assertEqual(weekend_result.returncode, 0, weekend_result.stderr)
+        weekend = json.loads(weekend_result.stdout)
+        weekend_fixture = weekend["fixtureDiagnostics"][0]
+        weekend_gate = next(gate for gate in weekend["gates"] if gate["name"] == "offline-fixtures")
+        self.assertTrue(weekend["ready"])
+        self.assertEqual(weekend_fixture["samplingQuality"]["state"], "insufficient-history")
+        self.assertEqual(weekend_fixture["samplingQuality"]["observedWeekendCount"], 1)
+        self.assertEqual(len(weekend_fixture["warnings"]), 1)
+        self.assertEqual(weekend_gate["warnings"], [f"SPY: {weekend_fixture['warnings'][0]}"])
+
+        self.assertEqual(duplicate_result.returncode, 1, duplicate_result.stderr)
+        duplicate = json.loads(duplicate_result.stdout)
+        duplicate_gate = next(gate for gate in duplicate["gates"] if gate["name"] == "offline-fixtures")
+        self.assertFalse(duplicate["ready"])
+        self.assertEqual(duplicate_gate["errors"], ["duplicate fixture symbols: SPY"])
+        self.assertEqual(len(duplicate_gate["warnings"]), 2)
+        self.assertTrue(
+            all("exchange-calendar review" in warning for warning in duplicate_gate["warnings"])
+        )
 
     def test_backtest_cli_proves_default_slow_trend_window(self):
         result = self.run_cli(

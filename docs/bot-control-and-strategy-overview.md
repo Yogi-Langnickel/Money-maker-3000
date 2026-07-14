@@ -63,6 +63,19 @@ transition to the source observations and the terminal strategy state. It does
 not create orders,
 recommendations, return metrics, or execution-quality claims.
 
+`market-history-sampling-quality.v1` adds non-financial temporal coverage for
+offline fixtures. It uses a weekday grid rather than an exchange calendar and
+reports observation/interval counts, calendar span, weekday/weekend coverage,
+potential intervening weekdays, each adjacent calendar-day interval, and gap
+counts without exposing prices,
+returns, PnL, provider/account data, execution routes/actions, or
+recommendations. Potential weekday gaps are not proof of missing market
+sessions because holidays and exchange calendars are not modeled. Readiness
+emits an exchange-calendar-review warning whenever validated gap/weekend
+counters are nonzero, including a single weekend observation whose state remains
+`insufficient-history`, while readiness remains governed by actual errors. The
+readiness projection omits dates and adjacent-interval evidence.
+
 The `readiness` command is the operator gate before offline fixture diagnostics.
 It reports only offline-backtest readiness and suggests safe `backtest`
 commands for passing fixtures. It must not be interpreted as demo/live trading

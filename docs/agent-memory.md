@@ -40,6 +40,19 @@ Updated: 2026-07-15
   state they are not evaluated against real PnL.
 - `market_history.py` provides stdlib streaming CSV/date validation and
   single-pass history summaries.
+- `market-history-sampling-quality.v1` reports calendar-agnostic observation
+  coverage using O(n) interval arithmetic over already parsed bars. It counts
+  weekday/weekend observations, potential weekdays strictly between adjacent
+  observations, gaps over three calendar days, and the maximum calendar gap.
+  Its weekday grid is not an exchange calendar, so potential gaps are never
+  claimed as proof of missing market sessions. Readiness derives warnings from
+  the validated gap/weekend counters, so even one weekend observation warns
+  while retaining the `insufficient-history` state. Warnings do not change
+  error-based readiness, and the projection omits observation dates and interval
+  evidence. The full historical/batch DTO records each positive adjacent-date
+  difference in `intervalCalendarDays`; shared validation reconstructs every
+  observation date and all calendar counters from that evidence before the DTO
+  can drive warnings or enter a batch.
 - Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ`
   daily synthetic short fixtures. Historical backtest reports include
   `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market
