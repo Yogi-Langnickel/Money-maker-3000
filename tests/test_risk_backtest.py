@@ -649,6 +649,32 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(walk_forward["foldCount"], 5)
 
         unsafe = deepcopy(report)
+        self.assertTrue(all(scenario["config"]["ok"] for scenario in unsafe["scenarioSummaries"]))
+        self.assertTrue(all(scenario["config"]["errors"] == [] for scenario in unsafe["scenarioSummaries"]))
+        for run in unsafe["runs"]:
+            run["intentDiagnostics"]["strategyParameters"]["lookbackDays"] = "bad"
+        with self.assertRaisesRegex(ValueError, "authoritative history is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        for run in unsafe["runs"]:
+            run["intentDiagnostics"]["strategyParameters"]["unknownReplayField"] = 1
+        with self.assertRaisesRegex(ValueError, "authoritative history is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        for run in unsafe["runs"]:
+            run["intentDiagnostics"]["strategyParameters"]["dropTriggerPct"] = float("nan")
+        with self.assertRaisesRegex(ValueError, "authoritative history is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        for run in unsafe["runs"]:
+            del run["intentDiagnostics"]["strategyParameters"]["dropTriggerPct"]
+        with self.assertRaisesRegex(ValueError, "authoritative history is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
         unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][0]["stateCounts"] = {
             "trigger-observed": 1
         }
@@ -728,6 +754,14 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(diagnostics["parameterState"], "invalid-defaulted")
         self.assertEqual(diagnostics["requiredBarCount"], 20)
         self.assertEqual(diagnostics["walkForward"]["foldCount"], 1)
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["parameterState"] = "valid"
+        for scenario in unsafe["scenarioSummaries"]:
+            scenario["config"]["ok"] = True
+            scenario["config"]["errors"] = []
+        with self.assertRaisesRegex(ValueError, "authoritative configuration is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
     def test_market_history_parser_rejects_sensitive_columns_and_bad_rows(self):
         with self.assertRaisesRegex(ValueError, "account-linked columns"):

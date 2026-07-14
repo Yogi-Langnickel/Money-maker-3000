@@ -64,6 +64,10 @@ Updated: 2026-07-15
   and cross-fold transitions, and the terminal strategy state must match that
   authoritative reconstruction exactly; merely ordered ISO dates are not
   accepted as observation evidence.
+- Canonical replay accepts only exact safe strategy-parameter dictionaries from
+  every historical run. Scenario config `ok`/error evidence is structurally
+  checked and must reproduce the report's valid/invalid counts and error
+  histogram before it can preserve an original `invalid-defaulted` state.
 - Volatility history distinguishes stable/no-trigger, active-decline trigger,
   and recovered-after-decline observations from the bounded offline window;
   every state remains a non-recommendation with candidate intent `skip`.

@@ -11,7 +11,9 @@ from money_maker_3000.contracts import (
     SIMULATION_STRATEGY_PARAMETER_SCHEMAS,
     build_allocation_policy,
     merge_simulation_config,
+    safe_strategy_parameters_for_output,
     utc_iso,
+    validate_strategy_parameters,
 )
 from money_maker_3000.engine import CONFIG_VERSION, build_simulation_run
 from money_maker_3000.history_signals import build_strategy_history_diagnostics
@@ -425,6 +427,10 @@ def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str,
             )
         ):
             raise ValueError("offline fixture batch authoritative history is invalid")
+        parameter_validation = validate_strategy_parameters(strategy_id, parameters)
+        safe_parameters = safe_strategy_parameters_for_output(strategy_id, parameters)
+        if not parameter_validation.ok or parameters != safe_parameters:
+            raise ValueError("offline fixture batch authoritative history is invalid")
         if strategy_parameters is None:
             strategy_parameters = parameters
         elif parameters != strategy_parameters:
@@ -452,11 +458,24 @@ def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str,
         "unsupported strategy parameters ",
     )
     parameter_states: set[str] = set()
+    config_valid_count = 0
+    config_invalid_count = 0
+    config_error_histogram: dict[str, int] = {}
     for summary in scenario_summaries:
         config = summary.get("config") if isinstance(summary, dict) else None
         errors = config.get("errors") if isinstance(config, dict) else None
-        if not isinstance(errors, list) or any(not isinstance(error, str) for error in errors):
+        ok = config.get("ok") if isinstance(config, dict) else None
+        if (
+            not isinstance(ok, bool)
+            or not isinstance(errors, list)
+            or any(not isinstance(error, str) for error in errors)
+            or ok != (len(errors) == 0)
+        ):
             raise ValueError("offline fixture batch authoritative history is invalid")
+        config_valid_count += 1 if ok else 0
+        config_invalid_count += 0 if ok else 1
+        for error in errors:
+            config_error_histogram[error] = config_error_histogram.get(error, 0) + 1
         parameter_states.add(
             "invalid-defaulted"
             if any(error.startswith(parameter_error_prefixes) for error in errors)
@@ -464,6 +483,27 @@ def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str,
         )
     if len(parameter_states) != 1:
         raise ValueError("offline fixture batch authoritative history is invalid")
+    summary = report.get("summary")
+    reported_error_histogram = summary.get("configErrorHistogram") if isinstance(summary, dict) else None
+    if (
+        not isinstance(summary, dict)
+        or not isinstance(summary.get("configValidCount"), int)
+        or isinstance(summary.get("configValidCount"), bool)
+        or not isinstance(summary.get("configInvalidCount"), int)
+        or isinstance(summary.get("configInvalidCount"), bool)
+        or not isinstance(reported_error_histogram, dict)
+        or any(
+            not isinstance(error, str)
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count <= 0
+            for error, count in reported_error_histogram.items()
+        )
+        or summary.get("configValidCount") != config_valid_count
+        or summary.get("configInvalidCount") != config_invalid_count
+        or reported_error_histogram != config_error_histogram
+    ):
+        raise ValueError("offline fixture batch authoritative configuration is invalid")
     canonical["parameterState"] = parameter_states.pop()
     return canonical
 
