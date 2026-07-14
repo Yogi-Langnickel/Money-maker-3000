@@ -527,7 +527,7 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(batch["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
         self.assertEqual(
             batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["dtoVersion"],
-            "strategy-history-diagnostics.v2",
+            "strategy-history-diagnostics.v3",
         )
         self.assertEqual(batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["candidateIntent"], "skip")
         self.assertEqual(
@@ -592,6 +592,71 @@ class RiskAndBacktestTests(unittest.TestCase):
         )
         unsafe = deepcopy(volatility_report)
         unsafe["strategyHistoryDiagnostics"]["walkForward"]["stateCounts"] = {"no-trigger-observed": 1}
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(volatility_report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["foldCount"] = 0
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"] = []
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(volatility_report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][0]["foldIndex"] = 1
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(volatility_report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][0]["foldIndex"] = False
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(volatility_report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][0]["firstObservationDate"] = (
+            "2026-05-14"
+        )
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+    def test_offline_fixture_batch_rejects_tampered_multi_fold_walk_forward_diagnostics(self):
+        report = build_historical_fixture_backtest(
+            bars=[
+                Bar("SPY", f"2026-05-{7 + index:02d}", close, close, close, close, 1000.0, "synthetic-test-fixture")
+                for index, close in enumerate(
+                    [100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 92.0, 97.0, 100.0, 101.0]
+                )
+            ],
+            strategy_id="volatility-band-accumulator",
+            selected_instrument=SELECTED_SPY,
+            strategy_parameters={"lookbackDays": 5, "dropTriggerPct": 3.0},
+            started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+        )
+        walk_forward = report["strategyHistoryDiagnostics"]["walkForward"]
+        self.assertEqual(walk_forward["foldCount"], 5)
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][0]["stateCounts"] = {
+            "trigger-observed": 1
+        }
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][0]["lastObservationDate"] = (
+            walk_forward["folds"][0]["firstObservationDate"]
+        )
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["folds"][1]["firstObservationDate"] = (
+            walk_forward["folds"][0]["lastObservationDate"]
+        )
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["transitionCount"] = 0
         with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
             build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
@@ -668,7 +733,7 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["maxFixtureRows"], 10000)
         self.assertEqual(report["metadata"]["inputSha256"], input_sha)
         self.assertEqual(report["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
-        self.assertEqual(report["strategyHistoryDiagnostics"]["dtoVersion"], "strategy-history-diagnostics.v2")
+        self.assertEqual(report["strategyHistoryDiagnostics"]["dtoVersion"], "strategy-history-diagnostics.v3")
         self.assertEqual(report["strategyHistoryDiagnostics"]["state"], "not-applicable")
         self.assertEqual(report["strategyHistoryDiagnostics"]["candidateIntent"], "skip")
         self.assertEqual(report["strategyHistoryDiagnostics"]["providerCalls"], "blocked")

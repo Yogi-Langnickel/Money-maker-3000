@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-07-14
+Updated: 2026-07-15
 
 ## Current Truth
 
@@ -52,11 +52,13 @@ Updated: 2026-07-14
   malformed history and invalid parameters fail closed; candidate intent stays
   `skip`, provider calls stay blocked, and no execution/profitability claim is
   produced.
-- `strategy-history-diagnostics.v2` adds a bounded walk-forward summary over
+- `strategy-history-diagnostics.v3` adds a bounded walk-forward summary over
   every eligible historical endpoint for volatility-band and slow-trend
-  strategies. It reports state counts, transition count, and first/last
-  observation dates only; candidate intent remains `skip`, provider calls are
-  blocked, account data is absent, and no P/L or profitability claim is made.
+  strategies. `strategy-history-walk-forward.v2` partitions eligible endpoints
+  into at most five deterministic, nonempty, balanced chronological folds and
+  reports only fold index, observation/date coverage, state counts, and
+  transition count. Candidate intent remains `skip`, provider calls are blocked,
+  account data is absent, and no P/L or profitability claim is made.
 - Volatility history distinguishes stable/no-trigger, active-decline trigger,
   and recovered-after-decline observations from the bounded offline window;
   every state remains a non-recommendation with candidate intent `skip`.

@@ -521,7 +521,7 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != set(ordered_keys):
         raise ValueError("offline fixture batch strategy history diagnostics are invalid")
     if (
-        value["dtoVersion"] != "strategy-history-diagnostics.v2"
+        value["dtoVersion"] != "strategy-history-diagnostics.v3"
         or value["providerCalls"] != "blocked"
         or value["accountData"] != "absent"
         or value["executionRoutes"] != "absent"
@@ -698,6 +698,8 @@ def _validated_walk_forward_diagnostics(
         "lastObservationDate",
         "stateCounts",
         "transitionCount",
+        "foldCount",
+        "folds",
     }
     if not isinstance(value, dict) or set(value) != keys:
         raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
@@ -712,7 +714,7 @@ def _validated_walk_forward_diagnostics(
         else set()
     )
     if (
-        value["dtoVersion"] != "strategy-history-walk-forward.v1"
+        value["dtoVersion"] != "strategy-history-walk-forward.v2"
         or value["providerCalls"] != "blocked"
         or value["accountData"] != "absent"
         or value["executionRoutes"] != "absent"
@@ -775,6 +777,94 @@ def _validated_walk_forward_diagnostics(
         ):
             raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
 
+    fold_count = value["foldCount"]
+    folds = value["folds"]
+    if (
+        not isinstance(fold_count, int)
+        or isinstance(fold_count, bool)
+        or fold_count < 0
+        or fold_count > 5
+        or not isinstance(folds, list)
+        or len(folds) != fold_count
+    ):
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    expected_fold_count = min(5, observation_count) if expected_state == "available" else 0
+    if fold_count != expected_fold_count:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
+    aggregate_fold_counts: dict[str, int] = {}
+    within_fold_transitions = 0
+    previous_fold_last: date | None = None
+    if fold_count:
+        base_fold_size, extra_observations = divmod(observation_count, fold_count)
+        for fold_index, fold in enumerate(folds):
+            fold_keys = {
+                "foldIndex",
+                "observationCount",
+                "firstObservationDate",
+                "lastObservationDate",
+                "stateCounts",
+                "transitionCount",
+            }
+            expected_fold_size = base_fold_size + (1 if fold_index < extra_observations else 0)
+            if not isinstance(fold, dict) or set(fold) != fold_keys:
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+            fold_observation_count = fold["observationCount"]
+            fold_transition_count = fold["transitionCount"]
+            fold_state_counts = fold["stateCounts"]
+            if (
+                not isinstance(fold["foldIndex"], int)
+                or isinstance(fold["foldIndex"], bool)
+                or fold["foldIndex"] != fold_index
+                or not isinstance(fold_observation_count, int)
+                or isinstance(fold_observation_count, bool)
+                or fold_observation_count != expected_fold_size
+                or not isinstance(fold_transition_count, int)
+                or isinstance(fold_transition_count, bool)
+                or fold_transition_count < 0
+                or fold_transition_count > fold_observation_count - 1
+                or not isinstance(fold_state_counts, dict)
+                or any(
+                    state not in supported_states
+                    or not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count <= 0
+                    for state, count in fold_state_counts.items()
+                )
+                or sum(fold_state_counts.values()) != fold_observation_count
+                or fold_transition_count < max(0, len(fold_state_counts) - 1)
+            ):
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+            try:
+                fold_first = date.fromisoformat(fold["firstObservationDate"])
+                fold_last = date.fromisoformat(fold["lastObservationDate"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid") from exc
+            if (
+                fold_first.isoformat() != fold["firstObservationDate"]
+                or fold_last.isoformat() != fold["lastObservationDate"]
+                or fold_first > fold_last
+                or (fold_observation_count == 1 and fold_first != fold_last)
+                or (fold_observation_count > 1 and fold_first >= fold_last)
+                or (previous_fold_last is not None and fold_first <= previous_fold_last)
+            ):
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+            previous_fold_last = fold_last
+            _merge_histogram(aggregate_fold_counts, fold_state_counts)
+            within_fold_transitions += fold_transition_count
+
+        if (
+            folds[0]["firstObservationDate"] != first_date
+            or folds[-1]["lastObservationDate"] != last_date
+            or sum(fold["observationCount"] for fold in folds) != observation_count
+            or aggregate_fold_counts != state_counts
+            or transition_count < within_fold_transitions
+            or transition_count > within_fold_transitions + fold_count - 1
+        ):
+            raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    elif folds:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
     return {
         "dtoVersion": value["dtoVersion"],
         "providerCalls": "blocked",
@@ -788,4 +878,16 @@ def _validated_walk_forward_diagnostics(
         "lastObservationDate": last_date,
         "stateCounts": {state: state_counts[state] for state in sorted(state_counts)},
         "transitionCount": transition_count,
+        "foldCount": fold_count,
+        "folds": [
+            {
+                "foldIndex": fold["foldIndex"],
+                "observationCount": fold["observationCount"],
+                "firstObservationDate": fold["firstObservationDate"],
+                "lastObservationDate": fold["lastObservationDate"],
+                "stateCounts": {state: fold["stateCounts"][state] for state in sorted(fold["stateCounts"])},
+                "transitionCount": fold["transitionCount"],
+            }
+            for fold in folds
+        ],
     }

@@ -42,6 +42,20 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(diagnostics["executionRoutes"], "absent")
         self.assertEqual(diagnostics["walkForward"]["eligibleObservationCount"], 1)
         self.assertEqual(diagnostics["walkForward"]["stateCounts"], {"trigger-observed": 1})
+        self.assertEqual(diagnostics["walkForward"]["foldCount"], 1)
+        self.assertEqual(
+            diagnostics["walkForward"]["folds"],
+            [
+                {
+                    "foldIndex": 0,
+                    "observationCount": 1,
+                    "firstObservationDate": "2025-01-05",
+                    "lastObservationDate": "2025-01-05",
+                    "stateCounts": {"trigger-observed": 1},
+                    "transitionCount": 0,
+                }
+            ],
+        )
 
     def test_volatility_band_distinguishes_stable_and_recovering_windows(self):
         stable = build_strategy_history_diagnostics(
@@ -80,6 +94,12 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(walk_forward["lastObservationDate"], "2025-01-09")
         self.assertEqual(walk_forward["candidateIntent"], "skip")
         self.assertEqual(walk_forward["providerCalls"], "blocked")
+        self.assertEqual(walk_forward["foldCount"], 5)
+        self.assertEqual([fold["foldIndex"] for fold in walk_forward["folds"]], [0, 1, 2, 3, 4])
+        self.assertEqual([fold["observationCount"] for fold in walk_forward["folds"]], [1, 1, 1, 1, 1])
+        self.assertEqual(walk_forward["folds"][0]["firstObservationDate"], "2025-01-05")
+        self.assertEqual(walk_forward["folds"][-1]["lastObservationDate"], "2025-01-09")
+        self.assertEqual(sum(fold["transitionCount"] for fold in walk_forward["folds"]), 0)
 
     def test_slow_trend_requires_full_window_and_confirmation(self):
         insufficient = build_strategy_history_diagnostics(
@@ -100,6 +120,8 @@ class HistorySignalTests(unittest.TestCase):
         self.assertGreater(rising["metrics"]["shortAverageClose"], rising["metrics"]["longAverageClose"])
         self.assertEqual(insufficient["walkForward"]["state"], "insufficient-history")
         self.assertEqual(insufficient["walkForward"]["eligibleObservationCount"], 0)
+        self.assertEqual(insufficient["walkForward"]["foldCount"], 0)
+        self.assertEqual(insufficient["walkForward"]["folds"], [])
         self.assertEqual(rising["walkForward"]["stateCounts"], {"trend-confirmed": 1})
 
     def test_slow_trend_walk_forward_reports_historical_state_coverage(self):
@@ -115,6 +137,22 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(walk_forward["transitionCount"], 1)
         self.assertEqual(walk_forward["candidateIntent"], "skip")
         self.assertEqual(walk_forward["executionRoutes"], "absent")
+        self.assertEqual(walk_forward["foldCount"], 5)
+        self.assertEqual([fold["observationCount"] for fold in walk_forward["folds"]], [3, 3, 2, 2, 2])
+        self.assertEqual(
+            [fold["stateCounts"] for fold in walk_forward["folds"]],
+            [
+                {"trend-not-confirmed": 3},
+                {"trend-confirmed": 3},
+                {"trend-confirmed": 2},
+                {"trend-confirmed": 2},
+                {"trend-confirmed": 2},
+            ],
+        )
+        self.assertEqual(walk_forward["folds"][0]["firstObservationDate"], "2025-03-02")
+        self.assertEqual(walk_forward["folds"][0]["lastObservationDate"], "2025-03-04")
+        self.assertEqual(walk_forward["folds"][-1]["firstObservationDate"], "2025-03-12")
+        self.assertEqual(walk_forward["folds"][-1]["lastObservationDate"], "2025-03-13")
 
     def test_diagnostics_are_redacted_and_diagnostics_only(self):
         diagnostics = build_strategy_history_diagnostics(
@@ -126,6 +164,8 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(diagnostics["state"], "not-applicable")
         self.assertEqual(diagnostics["accountData"], "absent")
         self.assertEqual(diagnostics["walkForward"]["state"], "not-applicable")
+        self.assertEqual(diagnostics["walkForward"]["foldCount"], 0)
+        self.assertEqual(diagnostics["walkForward"]["folds"], [])
         for forbidden in ("apikey", "accountid", "positionid", "orderid", "winrate", "sharpe", "approved-order"):
             self.assertNotIn(forbidden, serialized)
 
@@ -150,6 +190,8 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(diagnostics["state"], "invalid-history")
         self.assertIsNone(diagnostics["metrics"])
         self.assertEqual(diagnostics["walkForward"]["state"], "invalid-history")
+        self.assertEqual(diagnostics["walkForward"]["foldCount"], 0)
+        self.assertEqual(diagnostics["walkForward"]["folds"], [])
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertNotIn("nan", json.dumps(diagnostics).lower())
 
