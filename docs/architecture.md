@@ -39,11 +39,15 @@ The runtime package lives under `src/money_maker_3000/`.
 - `ledger.py`: redacted append/read/report JSONL audit records with exclusive
   writer locking around duplicate checks and append, plus fail-closed malformed
   ledger recovery for reporting.
+- `worker_leases.py`: strict local simulation-worker coordination with bounded
+  TTLs/completion markers, hashed opaque identities, monotonic fencing, atomic
+  persistence, replay protection, and a persisted kill switch.
 - `reconciliation.py`: simulation-only reconciliation records that redact
   provider/account fields and feed the pure risk-state contract.
 - `providers.py`: metadata-only provider boundary and disabled execution
   gateway contract.
-- `cli.py`: `backtest` and `ledger-report` commands.
+- `cli.py`: backtest/readiness/fixture diagnostics plus read-only ledger and
+  worker-lease reporting commands.
 
 The committed `contracts/dashboard-simulation-contract.json` artifact is the
 only cross-repository dashboard contract source. Consumers pin the producer
@@ -98,6 +102,63 @@ only allowlisted issue codes, line numbers, severities, and counts—never raw
 malformed content. Any rejected record marks integrity `corrupted` and makes
 the CLI exit non-zero after emitting the controlled report.
 
+## Simulation Worker Lease Boundary
+
+`worker_leases.py` coordinates at most one local simulation worker operation.
+Initialization is explicit. Acquire, renew, release, completion, kill-switch,
+and re-enable transitions use one exact-shape, size-capped JSON state file.
+Initialization creates a random 256-bit store epoch in both state and the
+stable lock anchor only when the same locked call created a previously absent
+lock. Acquire returns the epoch; authorize, renew, release, and complete require
+the exact epoch and fence, preventing credentials from surviving deletion and
+full store recreation. A missing state file under a surviving lock is never
+reinitialized.
+Opaque holder and idempotency inputs are domain-separated SHA-256 hashes before
+persistence; raw inputs are never stored. A same-holder acquire retry is
+byte-stable and does not extend TTL. Exact expiry permits takeover with a newer
+persisted fence, while stale same-owner/ABA credentials fail authorization.
+
+Completion atomically appends to a bounded 4,096-marker set keyed globally by
+idempotency hash and releases the lease. Markers are never silently evicted;
+capacity exhaustion blocks new acquisition before work or a new fence can be
+created. The 2 MiB store cap and marker limit cover roughly 1.8 years at six
+completed runs per day. Before capacity is reached, an explicit reviewed
+migration/archive must preserve durable duplicate suppression; automatic
+marker eviction is forbidden. An exact original completion replay is a
+controlled byte-stable success. Release keeps one exact replay tombstone until
+the next acquisition, allowing a byte-stable retry without making stale
+release credentials valid after reacquisition.
+Engaging the persisted kill switch with an allowlisted `operator-stop`,
+`risk-stop`, or `maintenance` reason revokes and fences any active lease.
+Repeated engagement is byte-stable. Re-enable records `operator-reenable`,
+advances revision/fence, and never resurrects the revoked lease.
+
+All existing-state access requires a bounded POSIX `fcntl` lock; there is no
+unlocked or non-POSIX fallback. A pinned, euid-owned parent with no group/world
+permissions is locked before the anchored sidecar lock. Atomic writes and
+directory fsync use that directory descriptor. Storage never creates the
+parent; operators must pre-create a private mode-`0700` directory. State and
+lock symlinks, non-regular files, hardlinks, broad file modes, duplicate JSON
+keys, unknown fields/versions, invalid numbers, time reversal relative to the
+last persisted mutation, and oversized/corrupt state fail closed. Writes use a
+unique mode-`0600` same-dir temporary file, fsync it, atomically replace state,
+then fsync the directory.
+The stable lock inode is checked around each transition. A missing read-only
+report creates nothing and returns canonical blocked/uninitialized output.
+Locking/filesystem failures report `unavailable`; malformed state reports
+`corrupted`; and a reversed report observation time returns a controlled
+blocked DTO. Mutation time comes only from the store-owned UTC clock. This
+clock is sampled only after the directory and sidecar locks are held. This
+boundary defends cooperating same-user processes and replacement races, but
+cannot protect against a malicious process running as the same OS user and
+ignoring advisory locks or tampering with that user's files.
+
+Lease authorization is a snapshot, not permission for a later side effect.
+Any future side-effect implementation must hold the lease lock and atomically
+recheck holder, idempotency key, epoch, fence, expiry, and kill switch
+immediately before the effect. This slice intentionally does not wire leases
+into the scheduler or ledger and adds no provider or execution behavior.
+
 ## EC2 And DynamoDB Direction
 
 When the worker moves to a dedicated EC2 instance, DynamoDB is the preferred
@@ -109,6 +170,11 @@ history.
 Secrets on EC2 should be loaded from AWS Secrets Manager through IAM. Google
 Sheets can still receive redacted reporting exports for human review, but the
 sheet must not be the source of truth for trade state or reconciliation.
+
+The local simulation lease file is a single-host coordination primitive, not
+the future distributed store. A multi-host worker must move fencing and
+idempotency transitions to conditional writes in the durable store rather than
+sharing or copying this local file.
 
 Recommended retention is 7 years for order/risk/reconciliation audit records,
 90 days of detailed portfolio snapshots compacted into daily summaries, 30 days
@@ -239,5 +305,6 @@ preview semantics, and reconciliation are proven.
 - Provider adapters.
 - Credential loading.
 - Durable account-linked storage.
+- Scheduler/ledger integration with local simulation leases.
 - Demo order preview or execution.
 - Live trading.

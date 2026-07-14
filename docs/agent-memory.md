@@ -12,8 +12,9 @@ Updated: 2026-07-15
   orders, place live orders, or expose execution routes.
 - CLI entrypoints are `PYTHONPATH=src python3.13 -m money_maker_3000.cli readiness`,
   `PYTHONPATH=src python3.13 -m money_maker_3000.cli backtest`,
-  `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch`, and
-  `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report ...`.
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli fixture-batch`,
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli ledger-report ...`, and
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report ...`.
 - Strategy selection comes only from the predefined registry in
   `strategies.py`; arbitrary operator-provided strategy code is not allowed.
   The current registry contains `dca-cash-reserve`, `threshold-rebalance`,
@@ -164,6 +165,42 @@ Updated: 2026-07-15
   contains only allowlisted issue codes/counts with raw content absent.
   Rejected records mark the report `corrupted`; the CLI still emits controlled
   JSON but returns exit status 1. Clean and warning-only reports return 0.
+- `worker_leases.py` provides strict standard-library single-host coordination
+  for future simulation workers. Explicit initialization creates exact-shape
+  bounded JSON and a stable mode-0600 POSIX `fcntl` lock with one random
+  256-bit epoch anchored in both files. Acquire returns the epoch; credentialed
+  transitions require it with the fence, and surviving-lock state deletion
+  cannot be silently reinitialized. Acquire uses bounded
+  TTLs, domain-separated hashes of opaque holder/idempotency inputs, and
+  persisted monotonic fences. Same-holder retries are byte-stable without TTL
+  extension; exact expiry permits fenced takeover; and stale ABA credentials
+  fail.
+- Completion atomically appends to a 4,096-entry global idempotency-marker set
+  within a 2 MiB store cap and releases. This covers roughly 1.8 years at six
+  completed runs/day. Markers are never evicted; capacity exhaustion blocks
+  acquisition before new work/fencing. A reviewed migration/archive must
+  preserve duplicate suppression before capacity. Exact replay is byte-stable.
+  Release stores one exact replay tombstone until the next acquisition, so a
+  release retry is byte-stable but becomes stale after reacquisition.
+- The persisted worker kill switch accepts only `operator-stop`, `risk-stop`,
+  or `maintenance`, revokes/fences active state, and is byte-stable on repeated
+  engagement. Re-enable stores `operator-reenable`, advances revision/fence,
+  and never resurrects a lease. State/lock symlinks, non-regular files,
+  hardlinks, broad modes, corrupt/oversized/duplicate-key JSON, unknown
+  versions/fields, invalid scalars, and reversed store-clock time fail closed.
+  Writes use unique same-directory 0600 temporaries, fsync, atomic replacement,
+  and pinned-directory fsync. The euid-owned parent must be pre-created with no
+  group/world permissions (mode 0700 required), is locked before the sidecar,
+  and is never created by storage. There is no unlocked/non-POSIX fallback and
+  no security guarantee against malicious same-euid file tampering. The
+  store-owned UTC clock is sampled only after both locks are held.
+- `simulation-worker-lease-report.v1` is read-only and redacted. Missing state
+  returns blocked/uninitialized and creates nothing. Reports expose no raw
+  holder/idempotency value, hash, epoch, fence, path, or state content;
+  provider calls remain blocked, account data/execution routes remain absent,
+  demo/live remain blocked, and candidate intent stays `skip`. Authorization
+  is snapshot-only; future effects must atomically recheck under the lease
+  lock. Scheduler and ledger integration are intentionally absent.
 - `reconciliation.py` builds simulation-only reconciliation records from
   caller-supplied synthetic/read-only inputs, redacts provider/account balance
   fields, derives freshness from supplied dates when present, rejects
@@ -193,6 +230,13 @@ Updated: 2026-07-15
   export a redacted dashboard DTO from an existing local synthetic ledger;
   malformed-record recovery never mutates the source and exits 1 when any
   record is rejected.
+- Lease report command:
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report`
+  `.local/simulation-worker-leases.json`:
+  inspect redacted local simulation lease state without modifying or
+  initializing it; use `--observed-at <timezone-aware-ISO>` for deterministic
+  output. Missing/corrupt/unavailable state and reversed observation time emit
+  controlled reports and exit 1.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.contract_manifest --check`:
   verify the committed dashboard contract artifact matches `contracts.py`.
 - `PYTHONPATH=src python3.13 -m money_maker_3000.fixture_provenance --check`:
@@ -215,6 +259,10 @@ Updated: 2026-07-15
   checks to keep repeated worker attempts idempotent.
 - Treat future provider rate limits as a budgeted resource before enabling any
   adapter.
+- Treat local lease authorization as a snapshot. Future side effects must
+  atomically recheck identity, epoch, fence, expiry, and kill switch while
+  holding the stable lock. Do not use the local file as a multi-host
+  coordination store.
 - Keep local ledgers, generated reports, profiles, caches, and provider-like
   fixtures ignored.
 - Use `.contextignore` to avoid loading generated ledgers, profiles, caches,

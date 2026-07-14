@@ -3,9 +3,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from money_maker_3000.backtest import build_synthetic_backtest
+from money_maker_3000.worker_leases import WorkerLeaseStore
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
@@ -888,6 +890,113 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["integrity"]["complete"])
         self.assertEqual(payload["integrity"]["acceptedRecordCount"], 1)
         self.assertEqual(payload["integrity"]["rejectedRecordCount"], 0)
+
+    def test_lease_report_cli_is_read_only_redacted_and_fail_closed(self):
+        observed_at = "2026-07-15T00:00:00Z"
+        now = datetime(2026, 7, 15, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "leases.json"
+            missing = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
+            self.assertFalse(state_path.exists())
+            self.assertFalse(WorkerLeaseStore(state_path).lock_path.exists())
+
+            store = WorkerLeaseStore(state_path, clock=lambda: now)
+            store.initialize()
+            store.acquire(holder="private-worker", idempotency_key="private-job", ttl_seconds=60)
+            before = state_path.read_bytes()
+            active = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
+            self.assertEqual(state_path.read_bytes(), before)
+
+            state_path.write_text("{bad-json}\n", encoding="utf-8")
+            corrupt_before = state_path.read_bytes()
+            corrupt = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
+            self.assertEqual(state_path.read_bytes(), corrupt_before)
+
+        self.assertEqual(missing.returncode, 1, missing.stderr)
+        missing_payload = json.loads(missing.stdout)
+        self.assertEqual(missing_payload["integrity"]["state"], "uninitialized")
+        self.assertEqual(missing_payload["candidateIntent"], "skip")
+        self.assertEqual(active.returncode, 0, active.stderr)
+        active_payload = json.loads(active.stdout)
+        self.assertEqual(active_payload["workerGate"]["state"], "busy")
+        serialized = json.dumps(active_payload)
+        for secret in ("private-worker", "private-job", str(state_path)):
+            self.assertNotIn(secret, serialized)
+        self.assertEqual(corrupt.returncode, 1, corrupt.stderr)
+        self.assertEqual(json.loads(corrupt.stdout)["integrity"]["state"], "corrupted")
+
+    def test_lease_report_cli_rejects_naive_time_and_execution_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "leases.json"
+            naive = self.run_cli("lease-report", str(state_path), "--observed-at", "2026-07-15T00:00:00")
+            execute = self.run_cli("lease-report", str(state_path), "--mode", "execute")
+
+        self.assertEqual(naive.returncode, 1)
+        self.assertIn("explicit timezone", naive.stderr)
+        self.assertEqual(naive.stdout, "")
+        self.assertEqual(execute.returncode, 1)
+        self.assertIn("execution mode is disabled", execute.stderr)
+
+    def test_lease_report_cli_bounds_corrupt_integers_and_controls_reversed_time(self):
+        now = datetime(2026, 7, 15, 0, 0, 1, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "leases.json"
+            WorkerLeaseStore(state_path, clock=lambda: now).initialize()
+
+            reversed_result = self.run_cli(
+                "lease-report",
+                str(state_path),
+                "--observed-at",
+                "2026-07-15T00:00:00Z",
+            )
+
+            oversized_integer = b'{"version":' + (b"9" * 5000) + b"}\n"
+            state_path.write_bytes(oversized_integer)
+            before = state_path.read_bytes()
+            corrupt_result = self.run_cli(
+                "lease-report",
+                str(state_path),
+                "--observed-at",
+                "2026-07-15T00:00:01Z",
+            )
+            self.assertEqual(state_path.read_bytes(), before)
+
+        self.assertEqual(reversed_result.returncode, 1)
+        self.assertEqual(reversed_result.stderr, "")
+        reversed_payload = json.loads(reversed_result.stdout)
+        self.assertEqual(reversed_payload["integrity"]["state"], "unavailable")
+        self.assertEqual(reversed_payload["integrity"]["issueCode"], "observed-time-reversed")
+        self.assertEqual(reversed_payload["workerGate"]["state"], "blocked")
+
+        self.assertEqual(corrupt_result.returncode, 1)
+        self.assertEqual(corrupt_result.stderr, "")
+        corrupt_payload = json.loads(corrupt_result.stdout)
+        self.assertEqual(corrupt_payload["integrity"]["state"], "corrupted")
+        self.assertEqual(corrupt_payload["integrity"]["issueCode"], "state-invalid")
+        serialized = json.dumps(corrupt_payload)
+        self.assertNotIn("9" * 100, serialized)
+        self.assertNotIn(str(state_path), serialized)
+
+    def test_lease_report_cli_normalizes_overlong_path_without_raw_detail(self):
+        private_basename = "private-" + ("x" * 300)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / private_basename
+            result = self.run_cli(
+                "lease-report",
+                str(state_path),
+                "--observed-at",
+                "2026-07-15T00:00:00Z",
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, "")
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["integrity"]["state"], "unavailable")
+        self.assertEqual(payload["integrity"]["issueCode"], "filesystem-unavailable")
+        self.assertEqual(payload["workerGate"]["state"], "blocked")
+        serialized = json.dumps(payload, sort_keys=True)
+        self.assertNotIn(private_basename, serialized)
+        self.assertNotIn(str(state_path), serialized)
 
 
 if __name__ == "__main__":
