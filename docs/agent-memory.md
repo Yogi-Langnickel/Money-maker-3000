@@ -189,10 +189,11 @@ Updated: 2026-07-15
   hardlinks, broad modes, corrupt/oversized/duplicate-key JSON, unknown
   versions/fields, invalid scalars, and reversed store-clock time fail closed.
   Writes use unique same-directory 0600 temporaries, fsync, atomic replacement,
-  and pinned-directory fsync. The euid-owned, non-group/world-writable parent
-  must be pre-created (mode 0700 recommended), is locked before the sidecar,
+  and pinned-directory fsync. The euid-owned parent must be pre-created with no
+  group/world permissions (mode 0700 required), is locked before the sidecar,
   and is never created by storage. There is no unlocked/non-POSIX fallback and
-  no security guarantee against malicious same-euid file tampering.
+  no security guarantee against malicious same-euid file tampering. The
+  store-owned UTC clock is sampled only after both locks are held.
 - `simulation-worker-lease-report.v1` is read-only and redacted. Missing state
   returns blocked/uninitialized and creates nothing. Reports expose no raw
   holder/idempotency value, hash, epoch, fence, path, or state content;
@@ -229,7 +230,9 @@ Updated: 2026-07-15
   export a redacted dashboard DTO from an existing local synthetic ledger;
   malformed-record recovery never mutates the source and exits 1 when any
   record is rejected.
-- `PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report .local/simulation-worker-leases.json`:
+- Lease report command:
+  `PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report`
+  `.local/simulation-worker-leases.json`:
   inspect redacted local simulation lease state without modifying or
   initializing it; use `--observed-at <timezone-aware-ISO>` for deterministic
   output. Missing/corrupt/unavailable state and reversed observation time emit

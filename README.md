@@ -136,7 +136,7 @@ PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report \
 ```
 
 Lease storage never creates its parent directory. Pre-create an euid-owned
-directory with mode `0700` (the runtime rejects group/world-writable parents);
+directory with mode `0700`; the runtime rejects any group/world permissions.
 `.local/` is ignored by Git and agent context retrieval.
 
 `lease-report` is read-only. A missing store emits the canonical
@@ -221,9 +221,9 @@ GitHub Actions runs the same compile and standard-library test gates on Python
   store epoch, persisted monotonic fencing, bounded POSIX locking, atomic
   replacement, exact release and completion replay protection, and a persisted
   kill switch with allowlisted reasons. Missing or corrupt state is never
-  silently repaired by a worker mutation. Authorization is only a snapshot: any future side effect
-  must atomically recheck holder, idempotency key, epoch, fence, expiry, and
-  kill-switch state while holding the lease lock.
+  silently repaired by a worker mutation. Authorization is only a snapshot:
+  any future side effect must atomically recheck holder, idempotency key, epoch,
+  fence, expiry, and kill-switch state while holding the lease lock.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
   claims, provider calls, or account-linked persistence.
 

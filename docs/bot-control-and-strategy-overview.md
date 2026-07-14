@@ -18,7 +18,7 @@ and safe controls, but it must not execute strategy code or place orders.
 | Risk gate | `risk.py` | Fail-closed before any candidate intent can become an order intent. |
 | Provider state | Metadata snapshot | Provider calls, credentials, account data, order previews, demo execution, and live execution are unavailable. |
 | Audit | Local redacted JSONL ledger helpers | Synthetic/redacted diagnostics only; no account-linked provider data; duplicate checks and appends are single-writer locked. |
-| Worker coordination | `worker_leases.py` | Local simulation-only lease with bounded TTL/completion state, hashed opaque identities, monotonic fencing, replay protection, and a persisted kill switch. No scheduler or ledger integration yet. |
+| Lease | `worker_leases.py` | [Local worker control](#worker-lease-control). |
 | Backtest readiness | `readiness.py` / CLI | `backtest-readiness.v1` verifies registry, allocation, run modes, provider boundary, and offline fixtures before diagnostics. |
 | Dashboard controls | Future worker DTO consumer | Disabled until worker API, auth, CSRF, rate limits, and review gates exist. |
 
@@ -92,10 +92,10 @@ also match on authorize, renew, release, and complete, so recreated storage
 cannot validate credentials from an earlier incarnation. A same-holder retry
 does not extend TTL. Exact expiry allows a fenced takeover; exact release replay
 remains idempotent until a new acquisition; and completion adds one global
-idempotency marker to a bounded 4,096-entry set. The 2 MiB/4,096-marker limit covers roughly 1.8 years at six
-completed runs per day. Markers are not evicted: full capacity blocks new work,
-and a reviewed migration/archive must preserve duplicate suppression before the
-limit is reached.
+idempotency marker to a bounded 4,096-entry set. The 2 MiB/4,096-marker limit
+covers roughly 1.8 years at six completed runs per day. Markers are not evicted:
+full capacity blocks new work, and a reviewed migration/archive must preserve
+duplicate suppression before the limit is reached.
 
 Kill-switch engagement records one allowlisted reason (`operator-stop`,
 `risk-stop`, or `maintenance`) and revokes the active lease. Re-enable records
@@ -111,14 +111,14 @@ coordination state only, with provider calls blocked, account data and execution
 routes absent, demo/live execution blocked, and candidate intent `skip`.
 
 Authorization is a moment-in-time snapshot. A future scheduler or side-effect
-path must atomically recheck the full lease identity, epoch, fence, expiry, and kill
-switch while holding the same lock. This lease does not itself authorize or
-perform a provider call, order preview, demo execution, or live execution.
+path must atomically recheck the full lease identity, epoch, fence, expiry, and
+kill switch while holding the same lock. This lease does not itself authorize
+or perform a provider call, order preview, demo execution, or live execution.
 
-The state parent must already exist, be owned by the effective user, and not be
-group/world writable; mode `0700` is recommended. The store pins and locks that
-directory before its anchored sidecar lock and never creates the parent. This
-is robust coordination among cooperating local processes, not a security
+The state parent must already exist, be owned by the effective user, and have
+no group/world permissions; mode `0700` is required. The store pins and locks
+that directory before its anchored sidecar lock and never creates the parent.
+This is robust coordination among cooperating local processes, not a security
 boundary against malicious code running as the same OS user.
 
 ## Future Strategy Candidates

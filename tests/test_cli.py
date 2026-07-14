@@ -977,6 +977,27 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("9" * 100, serialized)
         self.assertNotIn(str(state_path), serialized)
 
+    def test_lease_report_cli_normalizes_overlong_path_without_raw_detail(self):
+        private_basename = "private-" + ("x" * 300)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / private_basename
+            result = self.run_cli(
+                "lease-report",
+                str(state_path),
+                "--observed-at",
+                "2026-07-15T00:00:00Z",
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, "")
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["integrity"]["state"], "unavailable")
+        self.assertEqual(payload["integrity"]["issueCode"], "filesystem-unavailable")
+        self.assertEqual(payload["workerGate"]["state"], "blocked")
+        serialized = json.dumps(payload, sort_keys=True)
+        self.assertNotIn(private_basename, serialized)
+        self.assertNotIn(str(state_path), serialized)
+
 
 if __name__ == "__main__":
     unittest.main()

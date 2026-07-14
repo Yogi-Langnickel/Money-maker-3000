@@ -232,6 +232,75 @@ def _credential_operation_worker(
         queue.put(("error", operation, type(exc).__name__, str(exc)))
 
 
+def _delayed_clock_operation_worker(
+    path: str,
+    operation: str,
+    epoch: str | None,
+    fence: int | None,
+    clock_seconds,
+    attempting,
+    clock_called,
+    queue: multiprocessing.Queue,
+) -> None:
+    original_acquire_flock = worker_leases_module._acquire_flock
+
+    def instrumented_acquire_flock(fd: int, wait_seconds: float, *, label: str) -> None:
+        if label == "lease directory":
+            attempting.set()
+        original_acquire_flock(fd, wait_seconds, label=label)
+
+    def clock() -> datetime:
+        clock_called.set()
+        return datetime.fromtimestamp(clock_seconds.value, tz=timezone.utc)
+
+    try:
+        with patch(
+            "money_maker_3000.worker_leases._acquire_flock",
+            side_effect=instrumented_acquire_flock,
+        ):
+            store = ProductionWorkerLeaseStore(path, lock_wait_seconds=5, clock=clock)
+            if operation == "initialize":
+                result = store.initialize()
+            elif operation == "acquire":
+                result = store.acquire(holder="worker", idempotency_key="job", ttl_seconds=60)
+            elif operation == "authorize":
+                result = store.authorize(
+                    holder="worker",
+                    idempotency_key="job",
+                    epoch=epoch,
+                    fence=fence,
+                )
+            elif operation == "renew":
+                result = store.renew(
+                    holder="worker",
+                    idempotency_key="job",
+                    epoch=epoch,
+                    fence=fence,
+                    ttl_seconds=30,
+                )
+            elif operation == "release":
+                result = store.release(
+                    holder="worker",
+                    idempotency_key="job",
+                    epoch=epoch,
+                    fence=fence,
+                )
+            elif operation == "complete":
+                result = store.complete(
+                    holder="worker",
+                    idempotency_key="job",
+                    epoch=epoch,
+                    fence=fence,
+                )
+            elif operation == "kill":
+                result = store.engage_kill_switch(reason="risk-stop")
+            else:  # pragma: no cover - helper contract.
+                raise AssertionError(f"unknown operation: {operation}")
+        queue.put(("ok", result))
+    except Exception as exc:  # pragma: no cover - asserted in the parent process.
+        queue.put(("error", type(exc).__name__, str(exc)))
+
+
 def _crash_with_lock(lock_path: str, ready) -> None:
     import fcntl
 
@@ -872,15 +941,108 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         self.assertEqual(unsafe["integrity"]["issueCode"], "unsafe-lock")
         self.assertEqual(unsafe["integrity"]["rawContent"], "absent")
 
+    def test_report_normalizes_path_probe_and_state_io_failures(self):
+        private_detail = "private-filesystem-detail"
+        unsafe_paths = (
+            Path(self.temporary.name) / ("x" * 300),
+            Path(self.temporary.name) / f"embedded-{private_detail}\x00-name",
+        )
+        for path in unsafe_paths:
+            with self.subTest(path_kind="nul" if "\x00" in os.fspath(path) else "overlong"):
+                report = ProductionWorkerLeaseStore(path).report(observed_at=NOW)
+                serialized = json.dumps(report, sort_keys=True)
+                self.assertEqual(report["integrity"]["state"], "unavailable")
+                self.assertEqual(report["integrity"]["issueCode"], "filesystem-unavailable")
+                self.assertEqual(report["workerGate"]["state"], "blocked")
+                self.assertNotIn(private_detail, serialized)
+                self.assertNotIn(os.fspath(path), serialized)
+
+        self.initialize()
+        state_identity = os.stat(self.path).st_ino
+        real_read = os.read
+
+        def fail_state_read(fd: int, size: int) -> bytes:
+            if os.fstat(fd).st_ino == state_identity:
+                raise OSError(f"{private_detail}:{self.path}")
+            return real_read(fd, size)
+
+        with patch("money_maker_3000.worker_leases.os.read", side_effect=fail_state_read):
+            read_report = self.store.report(now=NOW)
+        self.assertEqual(read_report["integrity"]["state"], "unavailable")
+        self.assertEqual(read_report["integrity"]["issueCode"], "filesystem-unavailable")
+        self.assertNotIn(private_detail, json.dumps(read_report))
+        self.assertNotIn(os.fspath(self.path), json.dumps(read_report))
+
+        real_open = os.open
+
+        def fail_state_open(path, flags, *args, **kwargs):
+            if path == self.path.name and kwargs.get("dir_fd") is not None:
+                raise OSError(f"{private_detail}:{self.path}")
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("money_maker_3000.worker_leases.os.open", side_effect=fail_state_open):
+            open_report = self.store.report(now=NOW)
+        self.assertEqual(open_report["integrity"]["state"], "unavailable")
+        self.assertEqual(open_report["integrity"]["issueCode"], "filesystem-unavailable")
+        self.assertNotIn(private_detail, json.dumps(open_report))
+
+        real_stat = os.stat
+        state_stat_calls = 0
+
+        def fail_state_read_stat(path, *args, **kwargs):
+            nonlocal state_stat_calls
+            if path == self.path.name and kwargs.get("dir_fd") is not None:
+                state_stat_calls += 1
+                if state_stat_calls == 3:
+                    raise OSError(f"{private_detail}:{self.path}")
+            return real_stat(path, *args, **kwargs)
+
+        with patch("money_maker_3000.worker_leases.os.stat", side_effect=fail_state_read_stat):
+            stat_report = self.store.report(now=NOW)
+        self.assertEqual(stat_report["integrity"]["state"], "unavailable")
+        self.assertEqual(stat_report["integrity"]["issueCode"], "filesystem-unavailable")
+        self.assertNotIn(private_detail, json.dumps(stat_report))
+        self.assertGreaterEqual(state_stat_calls, 3)
+
+    def test_report_normalizes_lock_anchor_read_and_seek_failures(self):
+        self.initialize()
+        private_detail = "private-lock-io-detail"
+        lock_identity = os.stat(self.store.lock_path).st_ino
+        real_read = os.read
+        real_lseek = os.lseek
+
+        def fail_lock_read(fd: int, size: int) -> bytes:
+            if os.fstat(fd).st_ino == lock_identity:
+                raise OSError(f"{private_detail}:{self.store.lock_path}")
+            return real_read(fd, size)
+
+        def fail_lock_seek(fd: int, offset: int, whence: int) -> int:
+            if os.fstat(fd).st_ino == lock_identity:
+                raise OSError(f"{private_detail}:{self.store.lock_path}")
+            return real_lseek(fd, offset, whence)
+
+        for target, side_effect in (("os.read", fail_lock_read), ("os.lseek", fail_lock_seek)):
+            with self.subTest(operation=target):
+                with patch(f"money_maker_3000.worker_leases.{target}", side_effect=side_effect):
+                    report = self.store.report(now=NOW)
+                serialized = json.dumps(report, sort_keys=True)
+                self.assertEqual(report["integrity"]["state"], "unavailable")
+                self.assertEqual(report["integrity"]["issueCode"], "unsafe-lock")
+                self.assertEqual(report["workerGate"]["state"], "blocked")
+                self.assertNotIn(private_detail, serialized)
+                self.assertNotIn(os.fspath(self.store.lock_path), serialized)
+
     def test_untrusted_parent_is_unavailable_and_never_mutated(self):
-        os.chmod(self.path.parent, 0o777)
-        report = self.store.report(now=NOW)
-        self.assertEqual(report["integrity"]["state"], "unavailable")
-        self.assertEqual(report["integrity"]["issueCode"], "unsafe-parent")
-        with self.assertRaisesRegex(WorkerLeaseStoreError, "euid-owned"):
-            self.store.initialize(now=NOW)
-        self.assertFalse(self.path.exists())
-        self.assertFalse(self.store.lock_path.exists())
+        for mode in (0o755, 0o777):
+            with self.subTest(mode=oct(mode)):
+                os.chmod(self.path.parent, mode)
+                report = self.store.report(now=NOW)
+                self.assertEqual(report["integrity"]["state"], "unavailable")
+                self.assertEqual(report["integrity"]["issueCode"], "unsafe-parent")
+                with self.assertRaisesRegex(WorkerLeaseStoreError, "euid-owned"):
+                    self.store.initialize(now=NOW)
+                self.assertFalse(self.path.exists())
+                self.assertFalse(self.store.lock_path.exists())
 
     @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
     def test_lock_wait_is_bounded(self):
@@ -899,6 +1061,115 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
+
+    @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
+    def test_contended_transitions_sample_clock_only_after_both_locks(self):
+        import fcntl
+
+        context = multiprocessing.get_context("fork")
+
+        def run_delayed(
+            path: Path,
+            operation: str,
+            target: datetime,
+            *,
+            epoch: str | None = None,
+            fence: int | None = None,
+        ) -> dict:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            fcntl.flock(directory_fd, fcntl.LOCK_EX)
+            clock_seconds = context.Value("d", NOW.timestamp())
+            attempting = context.Event()
+            clock_called = context.Event()
+            queue = context.Queue()
+            process = context.Process(
+                target=_delayed_clock_operation_worker,
+                args=(
+                    os.fspath(path),
+                    operation,
+                    epoch,
+                    fence,
+                    clock_seconds,
+                    attempting,
+                    clock_called,
+                    queue,
+                ),
+            )
+            try:
+                process.start()
+                self.assertTrue(attempting.wait(timeout=5))
+                self.assertFalse(clock_called.is_set(), f"{operation} sampled time before the directory lock")
+                clock_seconds.value = target.timestamp()
+            finally:
+                fcntl.flock(directory_fd, fcntl.LOCK_UN)
+                os.close(directory_fd)
+            process.join(timeout=10)
+            self.assertEqual(process.exitcode, 0)
+            result = queue.get(timeout=2)
+            self.assertEqual(result[0], "ok", result)
+            self.assertTrue(clock_called.is_set())
+            return result[1]
+
+        initialize_path = Path(self.temporary.name) / "delayed-initialize.json"
+        initialized = run_delayed(initialize_path, "initialize", NOW + timedelta(seconds=5))
+        self.assertEqual(initialized["status"], "initialized")
+        self.assertEqual(
+            json.loads(initialize_path.read_text(encoding="utf-8"))["lastMutationAt"],
+            "2026-07-15T00:00:05.000000Z",
+        )
+
+        acquire_path = Path(self.temporary.name) / "delayed-acquire.json"
+        ProductionWorkerLeaseStore(acquire_path, clock=lambda: NOW).initialize()
+        acquired = run_delayed(acquire_path, "acquire", NOW + timedelta(seconds=10))
+        self.assertEqual(acquired["expiresAt"], "2026-07-15T00:01:10.000000Z")
+
+        authorize_path = Path(self.temporary.name) / "delayed-authorize.json"
+        authorize_store = ProductionWorkerLeaseStore(authorize_path, clock=lambda: NOW)
+        authorize_store.initialize()
+        authorize_lease = authorize_store.acquire(holder="worker", idempotency_key="job", ttl_seconds=1)
+        authorized = run_delayed(
+            authorize_path,
+            "authorize",
+            NOW + timedelta(seconds=2),
+            epoch=authorize_lease["epoch"],
+            fence=authorize_lease["fence"],
+        )
+        self.assertEqual(authorized["reason"], "expired")
+
+        renew_path = Path(self.temporary.name) / "delayed-renew.json"
+        renew_store = ProductionWorkerLeaseStore(renew_path, clock=lambda: NOW)
+        renew_store.initialize()
+        renew_lease = renew_store.acquire(holder="worker", idempotency_key="job", ttl_seconds=60)
+        renewed = run_delayed(
+            renew_path,
+            "renew",
+            NOW + timedelta(seconds=10),
+            epoch=renew_lease["epoch"],
+            fence=renew_lease["fence"],
+        )
+        self.assertEqual(renewed["expiresAt"], "2026-07-15T00:00:40.000000Z")
+
+        for operation in ("release", "complete"):
+            with self.subTest(operation=operation):
+                path = Path(self.temporary.name) / f"delayed-{operation}.json"
+                store = ProductionWorkerLeaseStore(path, clock=lambda: NOW)
+                store.initialize()
+                lease = store.acquire(holder="worker", idempotency_key="job", ttl_seconds=1)
+                result = run_delayed(
+                    path,
+                    operation,
+                    NOW + timedelta(seconds=2),
+                    epoch=lease["epoch"],
+                    fence=lease["fence"],
+                )
+                self.assertEqual(result, {"status": "expired", f"{operation}d": False})
+
+        kill_path = Path(self.temporary.name) / "delayed-kill.json"
+        ProductionWorkerLeaseStore(kill_path, clock=lambda: NOW).initialize()
+        killed = run_delayed(kill_path, "kill", NOW + timedelta(seconds=10))
+        self.assertEqual(killed["status"], "engaged")
+        kill_state = json.loads(kill_path.read_text(encoding="utf-8"))
+        self.assertEqual(kill_state["killSwitch"]["changedAt"], "2026-07-15T00:00:10.000000Z")
 
     @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
     def test_multiprocessing_fresh_same_owner_and_expiry_races(self):

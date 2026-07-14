@@ -30,6 +30,21 @@ MAX_COUNTER = (1 << 63) - 1
 MAX_LOCK_WAIT_SECONDS = 30.0
 KILL_SWITCH_ENGAGE_REASONS = frozenset({"operator-stop", "risk-stop", "maintenance"})
 KILL_SWITCH_REENABLE_REASON = "operator-reenable"
+LEASE_INTEGRITY_ISSUE_CODES = frozenset(
+    {
+        "filesystem-unavailable",
+        "locking-unavailable",
+        "lock-missing",
+        "lock-timeout",
+        "observed-time-invalid",
+        "observed-time-reversed",
+        "state-invalid",
+        "state-missing",
+        "store-missing",
+        "unsafe-lock",
+        "unsafe-parent",
+    }
+)
 _HASH_PREFIX = b"money-maker-3000:simulation-worker-lease:v1\x00"
 _EPOCH_BYTES = 32
 _EPOCH_HEX_LENGTH = _EPOCH_BYTES * 2
@@ -99,9 +114,9 @@ class WorkerLeaseStore:
         return _validated_now(self._clock())
 
     def initialize(self) -> dict[str, Any]:
-        instant = self._now()
         with self._lock(initialize=True) as locked:
             if locked.lock_created:
+                instant = self._now()
                 state = {
                     "version": STORE_VERSION,
                     "epoch": locked.epoch,
@@ -125,6 +140,7 @@ class WorkerLeaseStore:
                 raise WorkerLeaseStoreError("lease state was deleted while its stable lock survived")
             state, _ = _read_state(self.path, directory_fd=locked.directory_fd)
             _require_state_epoch(state, locked.epoch)
+            instant = self._now()
             _reject_time_reversal(state, instant)
             return {"status": "already-initialized", "initialized": True, "epoch": locked.epoch}
 
@@ -138,10 +154,10 @@ class WorkerLeaseStore:
         holder_hash = _opaque_hash("holder", holder)
         idempotency_hash = _opaque_hash("idempotency", idempotency_key)
         ttl = _validated_ttl(ttl_seconds)
-        instant = self._now()
         with self._lock() as locked:
             state, identity = _read_state(self.path, directory_fd=locked.directory_fd)
             _require_state_epoch(state, locked.epoch)
+            instant = self._now()
             _reject_time_reversal(state, instant)
             if state["killSwitch"]["engaged"]:
                 return _acquire_result("kill-switch-blocked")
@@ -194,10 +210,10 @@ class WorkerLeaseStore:
         holder_hash, idempotency_hash, expected_epoch, generation = _validated_credentials(
             holder, idempotency_key, epoch, fence
         )
-        instant = self._now()
         with self._lock() as locked:
             state, _ = _read_state(self.path, directory_fd=locked.directory_fd)
             _require_credential_epoch(state, locked.epoch, expected_epoch)
+            instant = self._now()
             _reject_time_reversal(state, instant)
             reason = _authorization_reason(state, holder_hash, idempotency_hash, generation, instant)
             return {
@@ -220,10 +236,10 @@ class WorkerLeaseStore:
             holder, idempotency_key, epoch, fence
         )
         ttl = _validated_ttl(ttl_seconds)
-        instant = self._now()
         with self._lock() as locked:
             state, identity = _read_state(self.path, directory_fd=locked.directory_fd)
             _require_credential_epoch(state, locked.epoch, expected_epoch)
+            instant = self._now()
             _reject_time_reversal(state, instant)
             reason = _authorization_reason(state, holder_hash, idempotency_hash, generation, instant)
             if reason != "authorized":
@@ -291,7 +307,6 @@ class WorkerLeaseStore:
         holder_hash, idempotency_hash, expected_epoch, generation = _validated_credentials(
             holder, idempotency_key, epoch, fence
         )
-        instant = self._now()
         with self._lock() as locked:
             state, identity = _read_state(self.path, directory_fd=locked.directory_fd)
             _require_credential_epoch(state, locked.epoch, expected_epoch)
@@ -319,6 +334,7 @@ class WorkerLeaseStore:
                 ):
                     return {"status": "already-completed", "completed": True}
 
+            instant = self._now()
             _reject_time_reversal(state, instant)
 
             if action == "complete" and completion:
@@ -369,10 +385,10 @@ class WorkerLeaseStore:
         return self._set_kill_switch(engaged=False, reason=KILL_SWITCH_REENABLE_REASON)
 
     def _set_kill_switch(self, *, engaged: bool, reason: str) -> dict[str, Any]:
-        instant = self._now()
         with self._lock() as locked:
             state, identity = _read_state(self.path, directory_fd=locked.directory_fd)
             _require_state_epoch(state, locked.epoch)
+            instant = self._now()
             _reject_time_reversal(state, instant)
             if state["killSwitch"]["engaged"] is engaged:
                 status = "already-engaged" if engaged else "already-enabled"
@@ -450,11 +466,18 @@ class WorkerLeaseStore:
                 issue_code=exc.issue_code,
                 worker_state="blocked",
             )
-        except (FileNotFoundError, OSError, WorkerLeaseStoreError):
+        except WorkerLeaseStoreError:
             return _lease_report(
                 initialized=state_exists,
                 integrity_state="corrupted",
                 issue_code="state-invalid" if state_exists else "state-missing",
+                worker_state="blocked",
+            )
+        except (OSError, ValueError):
+            return _lease_report(
+                initialized=state_exists,
+                integrity_state="unavailable",
+                issue_code="filesystem-unavailable",
                 worker_state="blocked",
             )
         try:
@@ -522,6 +545,8 @@ def _lease_report(
     completion_count: int | None = None,
     kill_switch_reason: str | None = None,
 ) -> dict[str, Any]:
+    if issue_code is not None and issue_code not in LEASE_INTEGRITY_ISSUE_CODES:
+        raise WorkerLeaseStoreError("lease report issue code is not allowlisted")
     completion_remaining = None if completion_count is None else MAX_COMPLETION_MARKERS - completion_count
     return {
         "dtoVersion": DTO_VERSION,
@@ -723,7 +748,7 @@ def _validated_path(value: str | Path) -> Path:
 def _open_trusted_parent(path: Path) -> tuple[int, tuple[int, int]]:
     try:
         before = os.stat(path.parent, follow_symlinks=False)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise WorkerLeaseUnavailableError(
             "state parent directory is unavailable",
             issue_code="unsafe-parent",
@@ -731,10 +756,10 @@ def _open_trusted_parent(path: Path) -> tuple[int, tuple[int, int]]:
     if (
         not stat.S_ISDIR(before.st_mode)
         or before.st_uid != os.geteuid()
-        or stat.S_IMODE(before.st_mode) & 0o022
+        or stat.S_IMODE(before.st_mode) & 0o077
     ):
         raise WorkerLeaseUnavailableError(
-            "state parent must be euid-owned and not group/world writable",
+            "state parent must be euid-owned with no group/world permissions",
             issue_code="unsafe-parent",
         )
     flags = os.O_RDONLY
@@ -744,16 +769,23 @@ def _open_trusted_parent(path: Path) -> tuple[int, tuple[int, int]]:
         flags |= os.O_NOFOLLOW
     try:
         directory_fd = os.open(path.parent, flags)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise WorkerLeaseUnavailableError(
             "state parent directory cannot be opened safely",
             issue_code="unsafe-parent",
         ) from exc
-    opened = os.fstat(directory_fd)
+    try:
+        opened = os.fstat(directory_fd)
+    except OSError as exc:
+        os.close(directory_fd)
+        raise WorkerLeaseUnavailableError(
+            "state parent directory cannot be verified safely",
+            issue_code="unsafe-parent",
+        ) from exc
     if (
         not stat.S_ISDIR(opened.st_mode)
         or opened.st_uid != os.geteuid()
-        or stat.S_IMODE(opened.st_mode) & 0o022
+        or stat.S_IMODE(opened.st_mode) & 0o077
         or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
     ):
         os.close(directory_fd)
@@ -819,11 +851,17 @@ def _locked_store(
             os.fchmod(lock_fd, 0o600)
         try:
             _validate_open_file(lock_fd, "lease lock")
-        except WorkerLeaseStoreError as exc:
+        except (OSError, WorkerLeaseStoreError) as exc:
             raise WorkerLeaseUnavailableError(str(exc), issue_code="unsafe-lock") from exc
         _acquire_flock(lock_fd, wait_seconds, label="lease sidecar")
         sidecar_locked = True
-        _verify_open_identity_at(directory_fd, lock_path.name, lock_fd, "lease lock")
+        _verify_open_identity_at(
+            directory_fd,
+            lock_path.name,
+            lock_fd,
+            "lease lock",
+            operational_issue_code="unsafe-lock",
+        )
         if lock_created:
             epoch = secrets.token_hex(_EPOCH_BYTES)
             _write_lock_anchor(lock_fd, epoch)
@@ -836,7 +874,13 @@ def _locked_store(
             epoch=epoch,
         )
         yield locked
-        _verify_open_identity_at(directory_fd, lock_path.name, lock_fd, "lease lock")
+        _verify_open_identity_at(
+            directory_fd,
+            lock_path.name,
+            lock_fd,
+            "lease lock",
+            operational_issue_code="unsafe-lock",
+        )
         _verify_directory_identity(state_path.parent, directory_fd, directory_identity)
     finally:
         try:
@@ -865,6 +909,11 @@ def _acquire_flock(fd: int, wait_seconds: float, *, label: str) -> None:
                     issue_code="lock-timeout",
                 )
             time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+        except OSError as exc:
+            raise WorkerLeaseUnavailableError(
+                f"{label} locking is unavailable",
+                issue_code="locking-unavailable",
+            ) from exc
 
 
 def _validate_open_file(fd: int, label: str) -> os.stat_result:
@@ -876,20 +925,58 @@ def _validate_open_file(fd: int, label: str) -> os.stat_result:
     return info
 
 
-def _verify_open_identity_at(directory_fd: int, name: str, fd: int, label: str) -> None:
-    opened = _validate_open_file(fd, label)
+def _verify_open_identity_at(
+    directory_fd: int,
+    name: str,
+    fd: int,
+    label: str,
+    *,
+    operational_issue_code: str | None = None,
+) -> None:
+    try:
+        opened = _validate_open_file(fd, label)
+    except OSError as exc:
+        if operational_issue_code is not None:
+            raise WorkerLeaseUnavailableError(
+                f"{label} cannot be verified safely",
+                issue_code=operational_issue_code,
+            ) from exc
+        raise
+    except WorkerLeaseStoreError as exc:
+        if operational_issue_code == "unsafe-lock":
+            raise WorkerLeaseUnavailableError(str(exc), issue_code="unsafe-lock") from exc
+        raise
     try:
         current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise WorkerLeaseStoreError(f"{label} changed while open") from exc
     except OSError as exc:
+        if operational_issue_code is not None:
+            raise WorkerLeaseUnavailableError(
+                f"{label} cannot be verified safely",
+                issue_code=operational_issue_code,
+            ) from exc
         raise WorkerLeaseStoreError(f"{label} changed while open") from exc
     if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
-        raise WorkerLeaseStoreError(f"{label} must be a regular single-link file")
+        error = WorkerLeaseStoreError(f"{label} must be a regular single-link file")
+        if operational_issue_code == "unsafe-lock":
+            raise WorkerLeaseUnavailableError(str(error), issue_code="unsafe-lock") from error
+        raise error
     if (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
-        raise WorkerLeaseStoreError(f"{label} changed while open")
+        error = WorkerLeaseStoreError(f"{label} changed while open")
+        if operational_issue_code == "unsafe-lock":
+            raise WorkerLeaseUnavailableError(str(error), issue_code="unsafe-lock") from error
+        raise error
 
 
 def _verify_directory_identity(path: Path, directory_fd: int, expected: tuple[int, int]) -> None:
-    opened = os.fstat(directory_fd)
+    try:
+        opened = os.fstat(directory_fd)
+    except OSError as exc:
+        raise WorkerLeaseUnavailableError(
+            "state parent changed while locked",
+            issue_code="unsafe-parent",
+        ) from exc
     try:
         current = os.stat(path, follow_symlinks=False)
     except OSError as exc:
@@ -913,6 +1000,11 @@ def _entry_exists(directory_fd: int, name: str) -> bool:
         os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return False
+    except (OSError, ValueError) as exc:
+        raise WorkerLeaseUnavailableError(
+            "lease store entry cannot be inspected safely",
+            issue_code="filesystem-unavailable",
+        ) from exc
     return True
 
 
@@ -934,12 +1026,26 @@ def _write_lock_anchor(lock_fd: int, epoch: str) -> None:
 
 
 def _read_lock_anchor(lock_fd: int) -> str:
-    info = _validate_open_file(lock_fd, "lease lock")
+    try:
+        info = _validate_open_file(lock_fd, "lease lock")
+    except OSError as exc:
+        raise WorkerLeaseUnavailableError(
+            "lease lock anchor cannot be inspected safely",
+            issue_code="unsafe-lock",
+        ) from exc
+    except WorkerLeaseStoreError as exc:
+        raise WorkerLeaseUnavailableError(str(exc), issue_code="unsafe-lock") from exc
     if info.st_size <= 0 or info.st_size > 256:
         raise WorkerLeaseUnavailableError("lease lock anchor is invalid", issue_code="unsafe-lock")
-    os.lseek(lock_fd, 0, os.SEEK_SET)
-    raw = os.read(lock_fd, 257)
-    os.lseek(lock_fd, 0, os.SEEK_SET)
+    try:
+        os.lseek(lock_fd, 0, os.SEEK_SET)
+        raw = os.read(lock_fd, 257)
+        os.lseek(lock_fd, 0, os.SEEK_SET)
+    except OSError as exc:
+        raise WorkerLeaseUnavailableError(
+            "lease lock anchor cannot be read safely",
+            issue_code="unsafe-lock",
+        ) from exc
     try:
         anchor = _load_strict_json(raw, label="lease lock anchor")
     except WorkerLeaseStoreError as exc:
@@ -958,7 +1064,10 @@ def _read_state(path: Path, *, directory_fd: int) -> tuple[dict[str, Any], tuple
     except FileNotFoundError as exc:
         raise WorkerLeaseStoreError("lease state is missing or deleted") from exc
     except OSError as exc:
-        raise WorkerLeaseStoreError("lease state cannot be inspected safely") from exc
+        raise WorkerLeaseUnavailableError(
+            "lease state cannot be inspected safely",
+            issue_code="filesystem-unavailable",
+        ) from exc
     if not stat.S_ISREG(preflight.st_mode) or preflight.st_nlink != 1:
         raise WorkerLeaseStoreError("lease state must be a regular single-link file")
     flags = os.O_RDONLY
@@ -969,15 +1078,30 @@ def _read_state(path: Path, *, directory_fd: int) -> tuple[dict[str, Any], tuple
     except FileNotFoundError as exc:
         raise WorkerLeaseStoreError("lease state is missing or deleted") from exc
     except OSError as exc:
-        raise WorkerLeaseStoreError("lease state cannot be opened safely") from exc
+        raise WorkerLeaseUnavailableError(
+            "lease state cannot be opened safely",
+            issue_code="filesystem-unavailable",
+        ) from exc
     try:
-        info = _validate_open_file(fd, "lease state")
+        try:
+            info = _validate_open_file(fd, "lease state")
+        except OSError as exc:
+            raise WorkerLeaseUnavailableError(
+                "lease state cannot be inspected safely",
+                issue_code="filesystem-unavailable",
+            ) from exc
         if info.st_size <= 0 or info.st_size > MAX_STORE_BYTES:
             raise WorkerLeaseStoreError("lease state size is invalid")
         chunks: list[bytes] = []
         remaining = MAX_STORE_BYTES + 1
         while remaining:
-            chunk = os.read(fd, min(4096, remaining))
+            try:
+                chunk = os.read(fd, min(4096, remaining))
+            except OSError as exc:
+                raise WorkerLeaseUnavailableError(
+                    "lease state cannot be read safely",
+                    issue_code="filesystem-unavailable",
+                ) from exc
             if not chunk:
                 break
             chunks.append(chunk)
@@ -985,7 +1109,13 @@ def _read_state(path: Path, *, directory_fd: int) -> tuple[dict[str, Any], tuple
         raw = b"".join(chunks)
         if len(raw) > MAX_STORE_BYTES:
             raise WorkerLeaseStoreError("lease state is oversized")
-        _verify_open_identity_at(directory_fd, path.name, fd, "lease state")
+        _verify_open_identity_at(
+            directory_fd,
+            path.name,
+            fd,
+            "lease state",
+            operational_issue_code="filesystem-unavailable",
+        )
     finally:
         os.close(fd)
     parsed = _load_strict_json(raw, label="lease state")
@@ -1161,7 +1291,13 @@ def _write_state(
         _verify_path_identity_at(locked.directory_fd, path.name, expected_identity, "lease state")
     elif expect_missing:
         _verify_path_missing_at(locked.directory_fd, path.name, "lease state")
-    _verify_open_identity_at(locked.directory_fd, lock_path.name, locked.lock_fd, "lease lock")
+    _verify_open_identity_at(
+        locked.directory_fd,
+        lock_path.name,
+        locked.lock_fd,
+        "lease lock",
+        operational_issue_code="unsafe-lock",
+    )
 
     temporary_name = f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(12)}"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -1174,14 +1310,26 @@ def _write_state(
         _validate_open_file(fd, "lease temporary state")
         _write_all(fd, raw)
         os.fsync(fd)
-        _verify_open_identity_at(locked.directory_fd, temporary_name, fd, "lease temporary state")
+        _verify_open_identity_at(
+            locked.directory_fd,
+            temporary_name,
+            fd,
+            "lease temporary state",
+            operational_issue_code="filesystem-unavailable",
+        )
         os.close(fd)
         fd = -1
         if expected_identity is not None:
             _verify_path_identity_at(locked.directory_fd, path.name, expected_identity, "lease state")
         elif expect_missing:
             _verify_path_missing_at(locked.directory_fd, path.name, "lease state")
-        _verify_open_identity_at(locked.directory_fd, lock_path.name, locked.lock_fd, "lease lock")
+        _verify_open_identity_at(
+            locked.directory_fd,
+            lock_path.name,
+            locked.lock_fd,
+            "lease lock",
+            operational_issue_code="unsafe-lock",
+        )
         os.replace(
             temporary_name,
             path.name,
