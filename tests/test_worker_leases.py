@@ -1032,6 +1032,29 @@ class WorkerLeaseStoreTests(unittest.TestCase):
                 self.assertNotIn(private_detail, serialized)
                 self.assertNotIn(os.fspath(self.store.lock_path), serialized)
 
+    def test_report_classifies_lock_disappearance_after_open_as_unavailable(self):
+        self.initialize()
+        real_open = os.open
+        lock_unlinked = False
+
+        def open_then_unlink_lock(path, flags, *args, **kwargs):
+            nonlocal lock_unlinked
+            fd = real_open(path, flags, *args, **kwargs)
+            if path == self.store.lock_path.name and not lock_unlinked:
+                lock_unlinked = True
+                os.unlink(path, dir_fd=kwargs["dir_fd"])
+            return fd
+
+        with patch("money_maker_3000.worker_leases.os.open", side_effect=open_then_unlink_lock):
+            report = self.store.report(now=NOW)
+
+        serialized = json.dumps(report, sort_keys=True)
+        self.assertTrue(lock_unlinked)
+        self.assertEqual(report["integrity"]["state"], "unavailable")
+        self.assertEqual(report["integrity"]["issueCode"], "unsafe-lock")
+        self.assertEqual(report["workerGate"]["state"], "blocked")
+        self.assertNotIn(os.fspath(self.store.lock_path), serialized)
+
     def test_untrusted_parent_is_unavailable_and_never_mutated(self):
         for mode in (0o755, 0o777):
             with self.subTest(mode=oct(mode)):

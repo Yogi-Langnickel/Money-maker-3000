@@ -949,6 +949,11 @@ def _verify_open_identity_at(
     try:
         current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError as exc:
+        if operational_issue_code is not None:
+            raise WorkerLeaseUnavailableError(
+                f"{label} cannot be verified safely",
+                issue_code=operational_issue_code,
+            ) from exc
         raise WorkerLeaseStoreError(f"{label} changed while open") from exc
     except OSError as exc:
         if operational_issue_code is not None:
