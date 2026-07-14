@@ -22,6 +22,9 @@ The runtime package lives under `src/money_maker_3000/`.
 - `risk.py`: pure fail-closed risk gate.
 - `market_history.py`: stdlib streaming CSV parser and single-pass history
   accumulator plus selected-period market diagnostics for dashboard charting.
+- `sampling_quality.py`: O(n) calendar-agnostic observation-gap diagnostics
+  using bounded weekday arithmetic, with no exchange-session completeness
+  claim or financial output.
 - `history_signals.py`: deterministic rolling-window observations for the
   predefined volatility-band and slow-trend strategies. It emits no orders,
   recommendations, profitability claims, or provider/account data and fails
@@ -158,6 +161,8 @@ Backtest DTOs include deterministic metadata:
 - Python version
 - explicit `startedAt`
 - `periodDiagnostics` for `24h`, `1w`, `1m`, `1y`, `5y`, and `max`
+- `samplingQuality` using the explicit `weekday-grid-not-exchange-calendar`
+  basis
 
 The `readiness` CLI command emits `backtest-readiness.v1` before operator-run
 fixture diagnostics. It returns `ready: true` only when strategy registry,
@@ -165,6 +170,8 @@ allocation policy, run-mode policy, provider boundary, and offline fixtures are
 safe for diagnostics. The readiness scope is explicitly
 `offline-backtest-only`; provider calls remain blocked, execution routes remain
 absent, demo/live execution remains blocked, and account data remains absent.
+Sampling anomalies are warnings that require exchange-calendar review; they do
+not block readiness and do not prove that any market session is missing.
 
 Backtest output is diagnostics only: coverage, veto counts, config errors,
 cadence/risk gate behavior, and fixture source/date coverage. It must not

@@ -40,6 +40,14 @@ Updated: 2026-07-15
   state they are not evaluated against real PnL.
 - `market_history.py` provides stdlib streaming CSV/date validation and
   single-pass history summaries.
+- `market-history-sampling-quality.v1` reports calendar-agnostic observation
+  coverage using O(n) interval arithmetic over already parsed bars. It counts
+  weekday/weekend observations, potential weekdays strictly between adjacent
+  observations, gaps over three calendar days, and the maximum calendar gap.
+  Its weekday grid is not an exchange calendar, so potential gaps are never
+  claimed as proof of missing market sessions. Readiness surfaces anomalous
+  states as exchange-calendar-review warnings without changing error-based
+  readiness; its projection omits observation dates.
 - Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ`
   daily synthetic short fixtures. Historical backtest reports include
   `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market

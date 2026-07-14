@@ -526,6 +526,14 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(batch["perSymbolDiagnostics"][0]["coverage"]["rowCount"], 3)
         self.assertEqual(batch["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
         self.assertEqual(
+            batch["perSymbolDiagnostics"][0]["samplingQuality"]["dtoVersion"],
+            "market-history-sampling-quality.v1",
+        )
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["state"], "weekday-grid-covered")
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["providerCalls"], "blocked")
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["accountData"], "absent")
+        self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["execution"], "blocked")
+        self.assertEqual(
             batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["dtoVersion"],
             "strategy-history-diagnostics.v3",
         )
@@ -535,6 +543,7 @@ class RiskAndBacktestTests(unittest.TestCase):
             "not-applicable",
         )
         self.assertEqual(batch["summary"]["strategyHistoryStateHistogram"], {"not-applicable": 3})
+        self.assertEqual(batch["summary"]["samplingQualityStateHistogram"], {"weekday-grid-covered": 3})
         self.assertIn("missing-reconciliation", batch["summary"]["vetoHistogram"])
         for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
@@ -559,6 +568,17 @@ class RiskAndBacktestTests(unittest.TestCase):
                 started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
                 input_sha256=sha256_file(FIXTURE_PATH),
             )
+
+        unsafe = deepcopy(report)
+        unsafe["samplingQuality"]["potentialMissingWeekdayCount"] = 1
+        unsafe["samplingQuality"]["state"] = "potential-weekday-gaps"
+        with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["samplingQuality"]["providerCalls"] = "allowed"
+        with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
         unsafe = deepcopy(report)
         unsafe["strategyHistoryDiagnostics"]["providerCalls"] = "allowed"

@@ -25,6 +25,12 @@ from money_maker_3000.market_history import (
 )
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, assess_data_freshness
 from money_maker_3000.rebalance_history import build_rebalance_history_diagnostics
+from money_maker_3000.sampling_quality import (
+    CALENDAR_BASIS,
+    SAMPLING_QUALITY_VERSION,
+    WEEKDAY_GAP_CAVEAT,
+    build_sampling_quality,
+)
 
 DEFAULT_SCENARIOS = (
     {"scenarioId": "dca-500", "strategyId": "dca-cash-reserve", "budgetUsd": 500.0},
@@ -373,6 +379,7 @@ def build_historical_fixture_backtest(
         },
         "history": history_summary,
         "periodDiagnostics": build_period_performance_diagnostics(period_bars),
+        "samplingQuality": build_sampling_quality(period_bars),
         "strategyHistoryDiagnostics": build_strategy_history_diagnostics(
             period_bars,
             strategy_id=strategy_id,
@@ -385,7 +392,7 @@ def build_historical_fixture_backtest(
     }
 
 
-def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str, Any]:
+def _canonical_strategy_history_from_report(report: dict[str, Any]) -> tuple[list[Bar], dict[str, Any]]:
     metadata = report.get("metadata")
     history = report.get("history")
     runs = report.get("runs")
@@ -505,7 +512,7 @@ def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str,
     ):
         raise ValueError("offline fixture batch authoritative configuration is invalid")
     canonical["parameterState"] = parameter_states.pop()
-    return canonical
+    return bars, canonical
 
 
 def build_offline_fixture_batch_diagnostics(
@@ -522,6 +529,7 @@ def build_offline_fixture_batch_diagnostics(
     blocked_events = 0
     veto_histogram: dict[str, int] = {}
     strategy_history_state_histogram: dict[str, int] = {}
+    sampling_quality_state_histogram: dict[str, int] = {}
 
     for report in report_list:
         if report.get("providerCalls") != "blocked":
@@ -538,16 +546,21 @@ def build_offline_fixture_batch_diagnostics(
         row_count = int(metadata["rowCount"])
         event_count = int(report["summary"]["eventCount"])
         blocked_count = int(report["summary"]["blockedCount"])
-        canonical_strategy_history = _canonical_strategy_history_from_report(report)
+        authoritative_bars, canonical_strategy_history = _canonical_strategy_history_from_report(report)
         strategy_history = _validated_strategy_history_diagnostics(
             report.get("strategyHistoryDiagnostics"),
             canonical=canonical_strategy_history,
+        )
+        sampling_quality = _validated_sampling_quality(
+            report.get("samplingQuality"),
+            canonical=build_sampling_quality(authoritative_bars),
         )
         total_rows += row_count
         total_events += event_count
         blocked_events += blocked_count
         _merge_histogram(veto_histogram, report["summary"]["vetoHistogram"])
         _merge_histogram(strategy_history_state_histogram, {strategy_history["state"]: 1})
+        _merge_histogram(sampling_quality_state_histogram, {sampling_quality["state"]: 1})
         per_symbol.append(
             {
                 "symbol": symbol,
@@ -565,6 +578,7 @@ def build_offline_fixture_batch_diagnostics(
                     "lastDate": metadata["lastDate"],
                 },
                 "periodDiagnostics": report["periodDiagnostics"],
+                "samplingQuality": sampling_quality,
                 "strategyHistoryDiagnostics": strategy_history,
                 "summary": report["summary"],
                 "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
@@ -605,6 +619,7 @@ def build_offline_fixture_batch_diagnostics(
             "blockedCount": blocked_events,
             "vetoHistogram": veto_histogram,
             "strategyHistoryStateHistogram": strategy_history_state_histogram,
+            "samplingQualityStateHistogram": sampling_quality_state_histogram,
             "performanceClaims": "diagnostics-only-no-return-or-execution-quality-metrics",
         },
     }
@@ -628,6 +643,90 @@ def _tee_history(
 def _merge_histogram(target: dict[str, int], source: dict[str, int]) -> None:
     for key, value in source.items():
         target[key] = target.get(key, 0) + int(value)
+
+
+def _validated_sampling_quality(value: Any, *, canonical: dict[str, object]) -> dict[str, object]:
+    ordered_keys = (
+        "dtoVersion",
+        "state",
+        "observationCount",
+        "intervalCount",
+        "firstDate",
+        "lastDate",
+        "calendarSpanDays",
+        "observedWeekdayCount",
+        "observedWeekendCount",
+        "potentialMissingWeekdayCount",
+        "intervalsOverThreeCalendarDays",
+        "maximumCalendarGapDays",
+        "calendarBasis",
+        "weekdayGapCaveat",
+        "providerCalls",
+        "accountData",
+        "execution",
+        "candidateIntent",
+        "claimBoundary",
+    )
+    if not isinstance(value, dict) or set(value) != set(ordered_keys):
+        raise ValueError("offline fixture batch sampling quality is invalid")
+    integer_keys = (
+        "observationCount",
+        "intervalCount",
+        "calendarSpanDays",
+        "observedWeekdayCount",
+        "observedWeekendCount",
+        "potentialMissingWeekdayCount",
+        "intervalsOverThreeCalendarDays",
+        "maximumCalendarGapDays",
+    )
+    if (
+        value["dtoVersion"] != SAMPLING_QUALITY_VERSION
+        or value["state"]
+        not in {
+            "insufficient-history",
+            "weekday-grid-covered",
+            "potential-weekday-gaps",
+            "non-weekday-observations",
+            "mixed-irregular-sampling",
+        }
+        or any(
+            not isinstance(value[key], int) or isinstance(value[key], bool) or value[key] < 0
+            for key in integer_keys
+        )
+        or value["intervalCount"] != max(0, value["observationCount"] - 1)
+        or value["observedWeekdayCount"] + value["observedWeekendCount"] != value["observationCount"]
+        or value["intervalsOverThreeCalendarDays"] > value["intervalCount"]
+        or value["calendarBasis"] != CALENDAR_BASIS
+        or value["weekdayGapCaveat"] != WEEKDAY_GAP_CAVEAT
+        or value["providerCalls"] != "blocked"
+        or value["accountData"] != "absent"
+        or value["execution"] != "blocked"
+        or value["candidateIntent"] != "skip"
+        or value["claimBoundary"] != "sampling-coverage-only-no-financial-or-session-completeness-claim"
+    ):
+        raise ValueError("offline fixture batch sampling quality is invalid")
+    first_date = value["firstDate"]
+    last_date = value["lastDate"]
+    if value["observationCount"] == 0:
+        if first_date is not None or last_date is not None or value["calendarSpanDays"] != 0:
+            raise ValueError("offline fixture batch sampling quality is invalid")
+    else:
+        try:
+            parsed_first = date.fromisoformat(first_date)
+            parsed_last = date.fromisoformat(last_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("offline fixture batch sampling quality is invalid") from exc
+        if (
+            parsed_first.isoformat() != first_date
+            or parsed_last.isoformat() != last_date
+            or parsed_first > parsed_last
+            or (parsed_last - parsed_first).days != value["calendarSpanDays"]
+        ):
+            raise ValueError("offline fixture batch sampling quality is invalid")
+    validated = {key: value[key] for key in ordered_keys}
+    if validated != canonical:
+        raise ValueError("offline fixture batch sampling quality is invalid")
+    return validated
 
 
 def _validated_strategy_history_diagnostics(value: Any, *, canonical: dict[str, Any]) -> dict[str, Any]:

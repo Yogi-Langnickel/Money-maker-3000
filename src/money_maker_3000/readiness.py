@@ -24,6 +24,7 @@ from money_maker_3000.engine import CONFIG_VERSION
 from money_maker_3000.market_history import PARSER_VERSION, iter_market_history_bars, sha256_file
 from money_maker_3000.providers import build_provider_metadata_snapshot
 from money_maker_3000.strategies import validate_strategy_registry
+from money_maker_3000.sampling_quality import sampling_quality_warning
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,11 @@ def build_backtest_readiness_report(
         diagnostic = _fixture_readiness_diagnostic(spec, started_at=started_at, allocation_policy=allocation)
         fixture_diagnostics.append(diagnostic)
 
+    fixture_warnings = [
+        f"{diagnostic['symbol']}: {warning}"
+        for diagnostic in fixture_diagnostics
+        for warning in diagnostic["warnings"]
+    ]
     if not fixture_diagnostics:
         gates.append(
             {
@@ -78,7 +84,7 @@ def build_backtest_readiness_report(
                 "name": "offline-fixtures",
                 "ok": False,
                 "errors": [f"duplicate fixture symbols: {', '.join(sorted(duplicate_symbols))}"],
-                "warnings": [],
+                "warnings": fixture_warnings,
             }
         )
     else:
@@ -92,7 +98,7 @@ def build_backtest_readiness_report(
                 "name": "offline-fixtures",
                 "ok": not fixture_errors,
                 "errors": fixture_errors,
-                "warnings": [],
+                "warnings": fixture_warnings,
             }
         )
 
@@ -222,6 +228,8 @@ def _fixture_readiness_diagnostic(
     except Exception as exc:
         return _fixture_error(symbol, spec, [str(exc)])
 
+    sampling_quality = report["samplingQuality"]
+    sampling_warning = sampling_quality_warning(str(sampling_quality["state"]))
     return {
         "symbol": symbol,
         "ok": True,
@@ -250,6 +258,25 @@ def _fixture_readiness_diagnostic(
             "providerCalls": report["periodDiagnostics"]["providerCalls"],
             "accountData": report["periodDiagnostics"]["accountData"],
             "execution": report["periodDiagnostics"]["execution"],
+        },
+        "samplingQuality": {
+            "dtoVersion": sampling_quality["dtoVersion"],
+            "state": sampling_quality["state"],
+            "observationCount": sampling_quality["observationCount"],
+            "intervalCount": sampling_quality["intervalCount"],
+            "calendarSpanDays": sampling_quality["calendarSpanDays"],
+            "observedWeekdayCount": sampling_quality["observedWeekdayCount"],
+            "observedWeekendCount": sampling_quality["observedWeekendCount"],
+            "potentialMissingWeekdayCount": sampling_quality["potentialMissingWeekdayCount"],
+            "intervalsOverThreeCalendarDays": sampling_quality["intervalsOverThreeCalendarDays"],
+            "maximumCalendarGapDays": sampling_quality["maximumCalendarGapDays"],
+            "calendarBasis": sampling_quality["calendarBasis"],
+            "weekdayGapCaveat": sampling_quality["weekdayGapCaveat"],
+            "providerCalls": sampling_quality["providerCalls"],
+            "accountData": sampling_quality["accountData"],
+            "execution": sampling_quality["execution"],
+            "candidateIntent": sampling_quality["candidateIntent"],
+            "claimBoundary": sampling_quality["claimBoundary"],
         },
         "strategyHistoryDiagnostics": {
             "dtoVersion": report["strategyHistoryDiagnostics"]["dtoVersion"],
@@ -285,7 +312,7 @@ def _fixture_readiness_diagnostic(
             },
         },
         "errors": [],
-        "warnings": [],
+        "warnings": [sampling_warning] if sampling_warning else [],
     }
 
 
