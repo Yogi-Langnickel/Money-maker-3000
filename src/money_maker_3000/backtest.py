@@ -515,12 +515,13 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         "requiredBarCount",
         "state",
         "metrics",
+        "walkForward",
         "parameterState",
     )
     if not isinstance(value, dict) or set(value) != set(ordered_keys):
         raise ValueError("offline fixture batch strategy history diagnostics are invalid")
     if (
-        value["dtoVersion"] != "strategy-history-diagnostics.v1"
+        value["dtoVersion"] != "strategy-history-diagnostics.v2"
         or value["providerCalls"] != "blocked"
         or value["accountData"] != "absent"
         or value["executionRoutes"] != "absent"
@@ -654,7 +655,137 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         ):
             raise ValueError("offline fixture batch strategy history metrics are invalid")
         metrics = {key: metrics[key] for key in ordered_metric_keys if key in metrics}
+
+    walk_forward = _validated_walk_forward_diagnostics(
+        value["walkForward"],
+        strategy_id=value["strategyId"],
+        history_state=value["state"],
+        bar_count=value["barCount"],
+        required_bar_count=value["requiredBarCount"],
+        latest_date=latest_date,
+    )
     return {
-        key: dict(metrics) if key == "metrics" and metrics is not None else value[key]
+        key: (
+            dict(metrics)
+            if key == "metrics" and metrics is not None
+            else walk_forward
+            if key == "walkForward"
+            else value[key]
+        )
         for key in ordered_keys
+    }
+
+
+def _validated_walk_forward_diagnostics(
+    value: Any,
+    *,
+    strategy_id: str,
+    history_state: str,
+    bar_count: int,
+    required_bar_count: int,
+    latest_date: str | None,
+) -> dict[str, Any]:
+    keys = {
+        "dtoVersion",
+        "providerCalls",
+        "accountData",
+        "executionRoutes",
+        "candidateIntent",
+        "performanceClaims",
+        "state",
+        "eligibleObservationCount",
+        "firstObservationDate",
+        "lastObservationDate",
+        "stateCounts",
+        "transitionCount",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    observation_count = value["eligibleObservationCount"]
+    transition_count = value["transitionCount"]
+    state_counts = value["stateCounts"]
+    supported_states = (
+        {"trigger-observed", "recovery-observed", "no-trigger-observed"}
+        if strategy_id == "volatility-band-accumulator"
+        else {"trend-confirmed", "trend-not-confirmed"}
+        if strategy_id == "slow-trend-allocation"
+        else set()
+    )
+    if (
+        value["dtoVersion"] != "strategy-history-walk-forward.v1"
+        or value["providerCalls"] != "blocked"
+        or value["accountData"] != "absent"
+        or value["executionRoutes"] != "absent"
+        or value["candidateIntent"] != "skip"
+        or value["performanceClaims"] != "historical-state-coverage-only-no-pnl-or-profitability-claim"
+        or value["state"] not in {"available", "insufficient-history", "invalid-history", "not-applicable"}
+        or not isinstance(observation_count, int)
+        or isinstance(observation_count, bool)
+        or observation_count < 0
+        or not isinstance(transition_count, int)
+        or isinstance(transition_count, bool)
+        or transition_count < 0
+        or not isinstance(state_counts, dict)
+        or any(
+            state not in supported_states
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count <= 0
+            for state, count in state_counts.items()
+        )
+        or sum(state_counts.values()) != observation_count
+        or transition_count > max(0, observation_count - 1)
+    ):
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
+    expected_state = (
+        "invalid-history"
+        if history_state == "invalid-history"
+        else "not-applicable"
+        if not supported_states
+        else "insufficient-history"
+        if bar_count < required_bar_count
+        else "available"
+    )
+    expected_count = max(0, bar_count - required_bar_count + 1) if expected_state == "available" else 0
+    if value["state"] != expected_state or observation_count != expected_count:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    if expected_state == "available" and (
+        history_state not in state_counts
+        or transition_count < max(0, len(state_counts) - 1)
+    ):
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
+    first_date = value["firstObservationDate"]
+    last_date = value["lastObservationDate"]
+    if expected_state != "available":
+        if first_date is not None or last_date is not None or state_counts or transition_count:
+            raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    else:
+        try:
+            parsed_first = date.fromisoformat(first_date)
+            parsed_last = date.fromisoformat(last_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("offline fixture batch walk-forward diagnostics are invalid") from exc
+        if (
+            parsed_first.isoformat() != first_date
+            or parsed_last.isoformat() != last_date
+            or parsed_first > parsed_last
+            or last_date != latest_date
+        ):
+            raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
+    return {
+        "dtoVersion": value["dtoVersion"],
+        "providerCalls": "blocked",
+        "accountData": "absent",
+        "executionRoutes": "absent",
+        "candidateIntent": "skip",
+        "performanceClaims": value["performanceClaims"],
+        "state": value["state"],
+        "eligibleObservationCount": observation_count,
+        "firstObservationDate": first_date,
+        "lastObservationDate": last_date,
+        "stateCounts": {state: state_counts[state] for state in sorted(state_counts)},
+        "transitionCount": transition_count,
     }

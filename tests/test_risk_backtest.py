@@ -31,6 +31,7 @@ from money_maker_3000.ledger import (
     redact_trade_log_entry,
 )
 from money_maker_3000.market_history import (
+    Bar,
     build_period_performance_diagnostics,
     iter_market_history_bars,
     parse_market_history_csv,
@@ -526,9 +527,13 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(batch["perSymbolDiagnostics"][0]["periodDiagnostics"]["providerCalls"], "blocked")
         self.assertEqual(
             batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["dtoVersion"],
-            "strategy-history-diagnostics.v1",
+            "strategy-history-diagnostics.v2",
         )
         self.assertEqual(batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["candidateIntent"], "skip")
+        self.assertEqual(
+            batch["perSymbolDiagnostics"][0]["strategyHistoryDiagnostics"]["walkForward"]["state"],
+            "not-applicable",
+        )
         self.assertEqual(batch["summary"]["strategyHistoryStateHistogram"], {"not-applicable": 3})
         self.assertIn("missing-reconciliation", batch["summary"]["vetoHistogram"])
         for forbidden in ("apiKey", "accountId", "positionId", "orderId", "rawProvider", "winRate", "sharpe"):
@@ -563,6 +568,31 @@ class RiskAndBacktestTests(unittest.TestCase):
         unsafe = deepcopy(report)
         unsafe["strategyHistoryDiagnostics"]["metrics"] = {"accountId": 123}
         with self.assertRaisesRegex(ValueError, "strategy history metrics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["providerCalls"] = "allowed"
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        unsafe = deepcopy(report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["eligibleObservationCount"] = 1
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
+            build_offline_fixture_batch_diagnostics(reports=[unsafe])
+
+        volatility_report = build_historical_fixture_backtest(
+            bars=[
+                Bar("SPY", f"2026-05-{11 + index:02d}", close, close, close, close, 1000.0, "synthetic-test-fixture")
+                for index, close in enumerate([100.0, 102.0, 101.0, 99.0, 96.0])
+            ],
+            strategy_id="volatility-band-accumulator",
+            selected_instrument=SELECTED_SPY,
+            strategy_parameters={"lookbackDays": 5, "dropTriggerPct": 3.0},
+            started_at=datetime.fromisoformat("2026-05-15T00:00:00+00:00"),
+        )
+        unsafe = deepcopy(volatility_report)
+        unsafe["strategyHistoryDiagnostics"]["walkForward"]["stateCounts"] = {"no-trigger-observed": 1}
+        with self.assertRaisesRegex(ValueError, "walk-forward diagnostics are invalid"):
             build_offline_fixture_batch_diagnostics(reports=[unsafe])
 
     def test_market_history_parser_rejects_sensitive_columns_and_bad_rows(self):
@@ -638,7 +668,7 @@ class RiskAndBacktestTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["maxFixtureRows"], 10000)
         self.assertEqual(report["metadata"]["inputSha256"], input_sha)
         self.assertEqual(report["periodDiagnostics"]["dtoVersion"], "market-period-diagnostics.v1")
-        self.assertEqual(report["strategyHistoryDiagnostics"]["dtoVersion"], "strategy-history-diagnostics.v1")
+        self.assertEqual(report["strategyHistoryDiagnostics"]["dtoVersion"], "strategy-history-diagnostics.v2")
         self.assertEqual(report["strategyHistoryDiagnostics"]["state"], "not-applicable")
         self.assertEqual(report["strategyHistoryDiagnostics"]["candidateIntent"], "skip")
         self.assertEqual(report["strategyHistoryDiagnostics"]["providerCalls"], "blocked")

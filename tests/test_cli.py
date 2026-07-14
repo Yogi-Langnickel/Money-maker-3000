@@ -93,6 +93,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertEqual(diagnostics["providerCalls"], "blocked")
         self.assertEqual(diagnostics["executionRoutes"], "absent")
+        self.assertEqual(diagnostics["walkForward"]["dtoVersion"], "strategy-history-walk-forward.v1")
+        self.assertEqual(diagnostics["walkForward"]["eligibleObservationCount"], 1)
+        self.assertEqual(diagnostics["walkForward"]["stateCounts"], {"trend-confirmed": 1})
+        self.assertEqual(diagnostics["walkForward"]["transitionCount"], 0)
         for forbidden in ("accountid", "positionid", "orderid", "apikey", "userkey", "winrate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
 
@@ -561,6 +565,22 @@ class CliTests(unittest.TestCase):
         self.assertTrue(
             all(
                 fixture["strategyHistoryDiagnostics"]["candidateIntent"] == "skip"
+                for fixture in payload["fixtureDiagnostics"]
+            )
+        )
+        self.assertTrue(
+            all(
+                fixture["strategyHistoryDiagnostics"]["walkForward"]
+                == {
+                    "dtoVersion": "strategy-history-walk-forward.v1",
+                    "state": "not-applicable",
+                    "eligibleObservationCount": 0,
+                    "transitionCount": 0,
+                    "providerCalls": "blocked",
+                    "accountData": "absent",
+                    "executionRoutes": "absent",
+                    "candidateIntent": "skip",
+                }
                 for fixture in payload["fixtureDiagnostics"]
             )
         )

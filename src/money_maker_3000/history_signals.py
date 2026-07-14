@@ -10,7 +10,8 @@ from money_maker_3000.contracts import (
 )
 from money_maker_3000.market_history import Bar
 
-DIAGNOSTICS_VERSION = "strategy-history-diagnostics.v1"
+DIAGNOSTICS_VERSION = "strategy-history-diagnostics.v2"
+WALK_FORWARD_VERSION = "strategy-history-walk-forward.v1"
 
 
 def _parameter(strategy_id: str, supplied: dict[str, Any], name: str) -> Any:
@@ -135,6 +136,64 @@ def _slow_trend(bars: list[Bar], parameters: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _walk_forward(
+    bars: list[Bar],
+    *,
+    strategy_id: str,
+    parameters: dict[str, Any],
+    required_bar_count: int,
+) -> dict[str, Any]:
+    base = {
+        "dtoVersion": WALK_FORWARD_VERSION,
+        "providerCalls": "blocked",
+        "accountData": "absent",
+        "executionRoutes": "absent",
+        "candidateIntent": "skip",
+        "performanceClaims": "historical-state-coverage-only-no-pnl-or-profitability-claim",
+    }
+    if strategy_id not in {"volatility-band-accumulator", "slow-trend-allocation"}:
+        return {
+            **base,
+            "state": "not-applicable",
+            "eligibleObservationCount": 0,
+            "firstObservationDate": None,
+            "lastObservationDate": None,
+            "stateCounts": {},
+            "transitionCount": 0,
+        }
+    if len(bars) < required_bar_count:
+        return {
+            **base,
+            "state": "insufficient-history",
+            "eligibleObservationCount": 0,
+            "firstObservationDate": None,
+            "lastObservationDate": None,
+            "stateCounts": {},
+            "transitionCount": 0,
+        }
+
+    evaluator = _volatility_band if strategy_id == "volatility-band-accumulator" else _slow_trend
+    states: list[str] = []
+    first_observation_date = bars[required_bar_count - 1].date
+    for endpoint in range(required_bar_count, len(bars) + 1):
+        bounded_window = bars[endpoint - required_bar_count:endpoint]
+        states.append(evaluator(bounded_window, parameters)["state"])
+
+    state_counts: dict[str, int] = {}
+    for state in states:
+        state_counts[state] = state_counts.get(state, 0) + 1
+    transition_count = sum(previous != current for previous, current in zip(states, states[1:]))
+    return {
+        **base,
+        "state": "available",
+        "eligibleObservationCount": len(states),
+        "firstObservationDate": first_observation_date,
+        "lastObservationDate": bars[-1].date,
+        "stateCounts": dict(sorted(state_counts.items())),
+        "transitionCount": transition_count,
+    }
+
+
 def build_strategy_history_diagnostics(
     bars: Iterable[Bar],
     *,
@@ -162,5 +221,18 @@ def build_strategy_history_diagnostics(
             "state": "not-applicable",
             "metrics": None,
         }
+    if result["state"] == "invalid-history":
+        walk_forward = {
+            **_walk_forward([], strategy_id=strategy_id, parameters=parameters, required_bar_count=1),
+            "state": "invalid-history",
+        }
+    else:
+        walk_forward = _walk_forward(
+            collected,
+            strategy_id=strategy_id,
+            parameters=parameters,
+            required_bar_count=result["requiredBarCount"],
+        )
+    result["walkForward"] = walk_forward
     result["parameterState"] = "valid" if validation.ok else "invalid-defaulted"
     return result

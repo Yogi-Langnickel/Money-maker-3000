@@ -40,6 +40,8 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertEqual(diagnostics["providerCalls"], "blocked")
         self.assertEqual(diagnostics["executionRoutes"], "absent")
+        self.assertEqual(diagnostics["walkForward"]["eligibleObservationCount"], 1)
+        self.assertEqual(diagnostics["walkForward"]["stateCounts"], {"trigger-observed": 1})
 
     def test_volatility_band_distinguishes_stable_and_recovering_windows(self):
         stable = build_strategy_history_diagnostics(
@@ -59,6 +61,26 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(recovering["metrics"]["maximumObservedDeclinePct"], -8.0)
         self.assertEqual(recovering["candidateIntent"], "skip")
 
+    def test_volatility_walk_forward_counts_states_and_transitions(self):
+        diagnostics = build_strategy_history_diagnostics(
+            bars_from_closes([100.0, 100.0, 100.0, 100.0, 100.0, 95.0, 92.0, 97.0, 100.0]),
+            strategy_id="volatility-band-accumulator",
+            strategy_parameters={"lookbackDays": 5, "dropTriggerPct": 3.0},
+        )
+
+        walk_forward = diagnostics["walkForward"]
+        self.assertEqual(walk_forward["state"], "available")
+        self.assertEqual(walk_forward["eligibleObservationCount"], 5)
+        self.assertEqual(
+            walk_forward["stateCounts"],
+            {"no-trigger-observed": 1, "recovery-observed": 1, "trigger-observed": 3},
+        )
+        self.assertEqual(walk_forward["transitionCount"], 2)
+        self.assertEqual(walk_forward["firstObservationDate"], "2025-01-05")
+        self.assertEqual(walk_forward["lastObservationDate"], "2025-01-09")
+        self.assertEqual(walk_forward["candidateIntent"], "skip")
+        self.assertEqual(walk_forward["providerCalls"], "blocked")
+
     def test_slow_trend_requires_full_window_and_confirmation(self):
         insufficient = build_strategy_history_diagnostics(
             bars_from_closes([100.0] * 10),
@@ -76,6 +98,23 @@ class HistorySignalTests(unittest.TestCase):
         self.assertEqual(rising["state"], "trend-confirmed")
         self.assertEqual(rising["metrics"]["confirmationMatches"], 3)
         self.assertGreater(rising["metrics"]["shortAverageClose"], rising["metrics"]["longAverageClose"])
+        self.assertEqual(insufficient["walkForward"]["state"], "insufficient-history")
+        self.assertEqual(insufficient["walkForward"]["eligibleObservationCount"], 0)
+        self.assertEqual(rising["walkForward"]["stateCounts"], {"trend-confirmed": 1})
+
+    def test_slow_trend_walk_forward_reports_historical_state_coverage(self):
+        diagnostics = build_strategy_history_diagnostics(
+            bars_from_closes([100.0] * 62 + [110.0] * 10),
+            strategy_id="slow-trend-allocation",
+            strategy_parameters={"shortLookbackDays": 10, "longLookbackDays": 60, "confirmationBars": 2},
+        )
+
+        walk_forward = diagnostics["walkForward"]
+        self.assertEqual(walk_forward["eligibleObservationCount"], 12)
+        self.assertEqual(walk_forward["stateCounts"], {"trend-confirmed": 9, "trend-not-confirmed": 3})
+        self.assertEqual(walk_forward["transitionCount"], 1)
+        self.assertEqual(walk_forward["candidateIntent"], "skip")
+        self.assertEqual(walk_forward["executionRoutes"], "absent")
 
     def test_diagnostics_are_redacted_and_diagnostics_only(self):
         diagnostics = build_strategy_history_diagnostics(
@@ -86,6 +125,7 @@ class HistorySignalTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["state"], "not-applicable")
         self.assertEqual(diagnostics["accountData"], "absent")
+        self.assertEqual(diagnostics["walkForward"]["state"], "not-applicable")
         for forbidden in ("apikey", "accountid", "positionid", "orderid", "winrate", "sharpe", "approved-order"):
             self.assertNotIn(forbidden, serialized)
 
@@ -109,6 +149,7 @@ class HistorySignalTests(unittest.TestCase):
 
         self.assertEqual(diagnostics["state"], "invalid-history")
         self.assertIsNone(diagnostics["metrics"])
+        self.assertEqual(diagnostics["walkForward"]["state"], "invalid-history")
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertNotIn("nan", json.dumps(diagnostics).lower())
 
