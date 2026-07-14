@@ -5,7 +5,7 @@ import cProfile
 import json
 import pstats
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from math import isfinite
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +24,7 @@ from money_maker_3000.readiness import (
     build_allocation_policy_for_readiness,
     build_backtest_readiness_report,
 )
+from money_maker_3000.worker_leases import build_worker_lease_report
 
 
 def _parse_started_at(raw: str | None) -> datetime:
@@ -31,6 +32,15 @@ def _parse_started_at(raw: str | None) -> datetime:
         return datetime.fromisoformat("2026-05-15T00:00:00+00:00")
     normalized = raw.replace("Z", "+00:00")
     return datetime.fromisoformat(normalized)
+
+
+def _parse_observed_at(raw: str | None) -> datetime:
+    if not raw:
+        return datetime.now(timezone.utc)
+    parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("observed-at must include an explicit timezone")
+    return parsed
 
 
 def _reject_execution_mode(run_mode: str) -> None:
@@ -113,6 +123,15 @@ def _build_parser() -> argparse.ArgumentParser:
     ledger_report = subparsers.add_parser("ledger-report", help="export a redacted JSONL ledger report")
     ledger_report.add_argument("ledger_path", type=Path)
     ledger_report.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
+
+    lease_report = subparsers.add_parser(
+        "lease-report",
+        help="inspect a local simulation worker lease without changing it",
+    )
+    lease_report.add_argument("state_path", type=Path)
+    lease_report.add_argument("--observed-at", help="timezone-aware ISO timestamp; defaults to current UTC time")
+    lease_report.add_argument("--lock-wait-seconds", type=float, default=1.0)
+    lease_report.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
     return parser
 
 
@@ -248,6 +267,15 @@ def run_ledger_report(args: argparse.Namespace) -> dict[str, Any]:
     return export_ledger_report(args.ledger_path)
 
 
+def run_lease_report(args: argparse.Namespace) -> dict[str, Any]:
+    _reject_execution_mode(args.mode)
+    return build_worker_lease_report(
+        args.state_path,
+        now=_parse_observed_at(args.observed_at),
+        lock_wait_seconds=args.lock_wait_seconds,
+    )
+
+
 def _run_with_optional_profile(profile_path: str | None, func: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     if not profile_path:
         return func()
@@ -358,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_readiness(args))
         elif args.command == "ledger-report":
             result = _run_with_optional_profile(args.profile, lambda: run_ledger_report(args))
+        elif args.command == "lease-report":
+            result = _run_with_optional_profile(args.profile, lambda: run_lease_report(args))
         else:
             parser.error(f"unsupported command: {args.command}")
             return 2
@@ -367,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.command == "readiness" and not result.get("ready", False):
         return 1
-    if args.command == "ledger-report" and not result.get("integrity", {}).get("complete", False):
+    if args.command in {"ledger-report", "lease-report"} and not result.get("integrity", {}).get("complete", False):
         return 1
     return 0
 

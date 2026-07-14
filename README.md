@@ -127,6 +127,26 @@ the source file. It emits allowlisted integrity issue codes and counts only;
 raw malformed content is never copied into the report. A corrupted ledger
 returns exit status `1`, while a clean or warning-only recovery returns `0`.
 
+Simulation worker lease report:
+
+```sh
+PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report \
+  .local/simulation-worker-leases.json
+```
+
+`lease-report` is read-only. A missing store emits the canonical
+`uninitialized`/blocked report, exits `1`, and creates neither the state file
+nor its lock. Existing state is read under a bounded POSIX `fcntl` lock. The
+DTO exposes no owner, idempotency value, hash, fencing generation, path, or raw
+content; it remains synthetic with provider calls blocked, account data and
+execution routes absent, demo/live execution blocked, and candidate intent
+`skip`. Use `--observed-at` with a timezone-aware ISO timestamp for a
+deterministic snapshot.
+
+Clean reports expose only safe completion count/capacity totals. A full marker
+set reports `completion-capacity-blocked`; it cannot mint a lease or fence for
+new work.
+
 Optional stdlib profiling:
 
 ```sh
@@ -191,6 +211,14 @@ GitHub Actions runs the same compile and standard-library test gates on Python
   UTF-8, and invalid v2 records; accepts redacted legacy records with explicit
   warnings; never mutates the source; and fails closed when any record is
   rejected.
+- Durable local simulation worker leases use strict bounded JSON, hashed opaque
+  holder/idempotency values, bounded TTLs and completion markers, persisted
+  monotonic fencing, bounded POSIX locking, atomic replacement, exact release
+  and completion replay protection, and a persisted kill switch with
+  allowlisted reasons. Missing or corrupt state is never silently repaired by
+  a worker mutation. Authorization is only a snapshot: any future side effect
+  must atomically recheck holder, idempotency key, fence, expiry, and
+  kill-switch state while holding the lease lock.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
   claims, provider calls, or account-linked persistence.
 

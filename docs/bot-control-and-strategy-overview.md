@@ -18,6 +18,7 @@ and safe controls, but it must not execute strategy code or place orders.
 | Risk gate | `risk.py` | Fail-closed before any candidate intent can become an order intent. |
 | Provider state | Metadata snapshot | Provider calls, credentials, account data, order previews, demo execution, and live execution are unavailable. |
 | Audit | Local redacted JSONL ledger helpers | Synthetic/redacted diagnostics only; no account-linked provider data; duplicate checks and appends are single-writer locked. |
+| Worker coordination | `worker_leases.py` | Local simulation-only lease with bounded TTL/completion state, hashed opaque identities, monotonic fencing, replay protection, and a persisted kill switch. No scheduler or ledger integration yet. |
 | Backtest readiness | `readiness.py` / CLI | `backtest-readiness.v1` verifies registry, allocation, run modes, provider boundary, and offline fixtures before diagnostics. |
 | Dashboard controls | Future worker DTO consumer | Disabled until worker API, auth, CSRF, rate limits, and review gates exist. |
 
@@ -81,6 +82,35 @@ It reports only offline-backtest readiness and suggests safe `backtest`
 commands for passing fixtures. It must not be interpreted as demo/live trading
 approval.
 
+## Worker Lease Control
+
+Before any future scheduled simulation operation, the worker must explicitly
+initialize and acquire local lease state. Active authorization requires an
+exact holder, idempotency value, current persisted fence, unexpired TTL, and a
+disengaged kill switch. A same-holder retry does not extend TTL. Exact expiry
+allows a fenced takeover; exact release replay remains idempotent until a new
+acquisition; and completion adds one global idempotency marker to a bounded
+4,096-entry set. The 2 MiB/4,096-marker limit covers roughly 1.8 years at six
+completed runs per day. Markers are not evicted: full capacity blocks new work,
+and a reviewed migration/archive must preserve duplicate suppression before the
+limit is reached.
+
+Kill-switch engagement records one allowlisted reason (`operator-stop`,
+`risk-stop`, or `maintenance`) and revokes the active lease. Re-enable records
+`operator-reenable`, advances the revision/fence, and never restores the old
+lease.
+
+The read-only `simulation-worker-lease-report.v1` DTO is intentionally
+redacted: owner/idempotency values and hashes, fencing generation, state path,
+and raw state content are absent. It reports synthetic coordination state only,
+with provider calls blocked, account data and execution routes absent,
+demo/live execution blocked, and candidate intent `skip`.
+
+Authorization is a moment-in-time snapshot. A future scheduler or side-effect
+path must atomically recheck the full lease identity, fence, expiry, and kill
+switch while holding the same lock. This lease does not itself authorize or
+perform a provider call, order preview, demo execution, or live execution.
+
 ## Future Strategy Candidates
 
 A read-only strategy-design subagent review on 2026-06-06 recommended these
@@ -114,8 +144,9 @@ Recommended fixture coverage:
 
 ## Next Implementation Slice
 
-1. Add durable worker leases before any scheduled worker operation.
 1. Add dashboard rendering for the schema metadata and intent diagnostics.
+1. Design scheduler integration around atomic lease rechecks without enabling
+   provider calls or execution.
 1. Add the next predefined strategy only after schema and safety tests are
    written first.
 1. Keep dashboard-facing DTO changes redacted and simulation-only.

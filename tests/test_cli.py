@@ -3,9 +3,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from money_maker_3000.backtest import build_synthetic_backtest
+from money_maker_3000.worker_leases import WorkerLeaseStore
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
 GLD_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "gld-daily.csv"
@@ -888,6 +890,52 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["integrity"]["complete"])
         self.assertEqual(payload["integrity"]["acceptedRecordCount"], 1)
         self.assertEqual(payload["integrity"]["rejectedRecordCount"], 0)
+
+    def test_lease_report_cli_is_read_only_redacted_and_fail_closed(self):
+        observed_at = "2026-07-15T00:00:00Z"
+        now = datetime(2026, 7, 15, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "leases.json"
+            missing = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
+            self.assertFalse(state_path.exists())
+            self.assertFalse(WorkerLeaseStore(state_path).lock_path.exists())
+
+            store = WorkerLeaseStore(state_path)
+            store.initialize(now=now)
+            store.acquire(holder="private-worker", idempotency_key="private-job", ttl_seconds=60, now=now)
+            before = state_path.read_bytes()
+            active = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
+            self.assertEqual(state_path.read_bytes(), before)
+
+            state_path.write_text("{bad-json}\n", encoding="utf-8")
+            corrupt_before = state_path.read_bytes()
+            corrupt = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
+            self.assertEqual(state_path.read_bytes(), corrupt_before)
+
+        self.assertEqual(missing.returncode, 1, missing.stderr)
+        missing_payload = json.loads(missing.stdout)
+        self.assertEqual(missing_payload["integrity"]["state"], "uninitialized")
+        self.assertEqual(missing_payload["candidateIntent"], "skip")
+        self.assertEqual(active.returncode, 0, active.stderr)
+        active_payload = json.loads(active.stdout)
+        self.assertEqual(active_payload["workerGate"]["state"], "busy")
+        serialized = json.dumps(active_payload)
+        for secret in ("private-worker", "private-job", str(state_path)):
+            self.assertNotIn(secret, serialized)
+        self.assertEqual(corrupt.returncode, 1, corrupt.stderr)
+        self.assertEqual(json.loads(corrupt.stdout)["integrity"]["state"], "corrupted")
+
+    def test_lease_report_cli_rejects_naive_time_and_execution_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "leases.json"
+            naive = self.run_cli("lease-report", str(state_path), "--observed-at", "2026-07-15T00:00:00")
+            execute = self.run_cli("lease-report", str(state_path), "--mode", "execute")
+
+        self.assertEqual(naive.returncode, 1)
+        self.assertIn("explicit timezone", naive.stderr)
+        self.assertEqual(naive.stdout, "")
+        self.assertEqual(execute.returncode, 1)
+        self.assertIn("execution mode is disabled", execute.stderr)
 
 
 if __name__ == "__main__":
