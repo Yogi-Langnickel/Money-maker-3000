@@ -162,7 +162,7 @@ Backtest DTOs include deterministic metadata:
 - explicit `startedAt`
 - `periodDiagnostics` for `24h`, `1w`, `1m`, `1y`, `5y`, and `max`
 - `samplingQuality` using the explicit `weekday-grid-not-exchange-calendar`
-  basis
+  basis and exact adjacent-date interval evidence
 
 The `readiness` CLI command emits `backtest-readiness.v1` before operator-run
 fixture diagnostics. It returns `ready: true` only when strategy registry,
@@ -173,7 +173,9 @@ absent, demo/live execution remains blocked, and account data remains absent.
 Sampling anomalies are warnings that require exchange-calendar review; they do
 not block readiness and do not prove that any market session is missing. The
 warning derives from validated counters, so a single weekend observation warns
-without replacing its `insufficient-history` state.
+without replacing its `insufficient-history` state. Full historical and batch
+diagnostics retain adjacent-date interval evidence for exact validation;
+readiness deliberately omits that evidence and observation dates.
 
 Backtest output is diagnostics only: coverage, veto counts, config errors,
 cadence/risk gate behavior, and fixture source/date coverage. It must not

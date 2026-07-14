@@ -530,6 +530,10 @@ class RiskAndBacktestTests(unittest.TestCase):
             "market-history-sampling-quality.v1",
         )
         self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["state"], "weekday-grid-covered")
+        self.assertEqual(
+            batch["perSymbolDiagnostics"][0]["samplingQuality"]["intervalCalendarDays"],
+            [1, 1],
+        )
         self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["providerCalls"], "blocked")
         self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["accountData"], "absent")
         self.assertEqual(batch["perSymbolDiagnostics"][0]["samplingQuality"]["execution"], "blocked")

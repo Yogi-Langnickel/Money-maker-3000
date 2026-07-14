@@ -15,12 +15,30 @@ def bar(observed_date: str) -> Bar:
 
 
 class SamplingQualityTests(unittest.TestCase):
+    def test_empty_history_has_exact_empty_interval_evidence(self):
+        quality = build_sampling_quality([])
+
+        self.assertEqual(quality["state"], "insufficient-history")
+        self.assertEqual(quality["observationCount"], 0)
+        self.assertEqual(quality["intervalCount"], 0)
+        self.assertEqual(quality["intervalCalendarDays"], [])
+        self.assertIsNone(quality["firstDate"])
+        self.assertIsNone(quality["lastDate"])
+        self.assertEqual(quality["calendarSpanDays"], 0)
+        self.assertEqual(quality["observedWeekdayCount"], 0)
+        self.assertEqual(quality["observedWeekendCount"], 0)
+        self.assertEqual(quality["potentialMissingWeekdayCount"], 0)
+        self.assertEqual(quality["intervalsOverThreeCalendarDays"], 0)
+        self.assertEqual(quality["maximumCalendarGapDays"], 0)
+        self.assertEqual(validated_sampling_quality(quality), quality)
+
     def test_single_observation_is_insufficient_without_anomaly_warning(self):
         quality = build_sampling_quality([bar("2026-05-11")])
 
         self.assertEqual(quality["state"], "insufficient-history")
         self.assertEqual(quality["observationCount"], 1)
         self.assertEqual(quality["intervalCount"], 0)
+        self.assertEqual(quality["intervalCalendarDays"], [])
         self.assertEqual(quality["firstDate"], "2026-05-11")
         self.assertEqual(quality["lastDate"], "2026-05-11")
         self.assertEqual(quality["calendarSpanDays"], 0)
@@ -41,6 +59,7 @@ class SamplingQualityTests(unittest.TestCase):
 
         self.assertEqual(quality["state"], "weekday-grid-covered")
         self.assertEqual(quality["potentialMissingWeekdayCount"], 0)
+        self.assertEqual(quality["intervalCalendarDays"], [3])
         self.assertEqual(quality["intervalsOverThreeCalendarDays"], 0)
         self.assertEqual(quality["maximumCalendarGapDays"], 3)
         self.assertIsNone(sampling_quality_warning(quality))
@@ -150,6 +169,40 @@ class SamplingQualityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
             validated_sampling_quality(malformed)
 
+    def test_validator_rejects_jointly_impossible_calendar_summary_groups(self):
+        malformed = build_sampling_quality(
+            [bar("2026-01-05"), bar("2026-01-08"), bar("2026-01-11")]
+        )
+        self.assertEqual(malformed["intervalCalendarDays"], [3, 3])
+        malformed["observedWeekdayCount"] = 1
+        malformed["observedWeekendCount"] = 2
+        malformed["potentialMissingWeekdayCount"] = 4
+        malformed["state"] = "mixed-irregular-sampling"
+
+        with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
+            validated_sampling_quality(malformed)
+
+    def test_validator_rejects_tampered_interval_evidence(self):
+        quality = build_sampling_quality(
+            [bar("2026-01-05"), bar("2026-01-08"), bar("2026-01-12")]
+        )
+        cases = (
+            ("length", [3], {}),
+            ("zero", [3, 0], {}),
+            ("bool", [3, True], {}),
+            ("string", [3, "4"], {}),
+            ("sum", [3, 5], {"maximumCalendarGapDays": 5}),
+            ("maximum", [3, 4], {"maximumCalendarGapDays": 3}),
+            ("long-count", [3, 4], {"intervalsOverThreeCalendarDays": 0}),
+        )
+        for name, intervals, changes in cases:
+            with self.subTest(name=name):
+                malformed = dict(quality)
+                malformed["intervalCalendarDays"] = intervals
+                malformed.update(changes)
+                with self.assertRaisesRegex(ValueError, "sampling quality is invalid"):
+                    validated_sampling_quality(malformed)
+
     def test_validator_accepts_exact_short_and_long_gap_feasibility_boundaries(self):
         cases = (
             (date(2026, 1, 5), (3, 1, 1), 0, 3, 5),
@@ -164,6 +217,7 @@ class SamplingQualityTests(unittest.TestCase):
                     dates.append(dates[-1] + timedelta(days=gap))
                 quality = build_sampling_quality([bar(observed.isoformat()) for observed in dates])
 
+                self.assertEqual(quality["intervalCalendarDays"], list(gaps))
                 self.assertEqual(quality["intervalsOverThreeCalendarDays"], expected_long_count)
                 self.assertEqual(quality["maximumCalendarGapDays"], expected_maximum)
                 self.assertEqual(quality["calendarSpanDays"], expected_span)
