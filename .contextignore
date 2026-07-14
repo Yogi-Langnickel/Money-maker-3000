@@ -21,3 +21,4 @@ tmp/
 temp/
 reports/
 performance-report.*
+.local/

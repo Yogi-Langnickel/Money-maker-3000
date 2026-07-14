@@ -130,9 +130,14 @@ returns exit status `1`, while a clean or warning-only recovery returns `0`.
 Simulation worker lease report:
 
 ```sh
+install -d -m 700 .local
 PYTHONPATH=src python3.13 -m money_maker_3000.cli lease-report \
   .local/simulation-worker-leases.json
 ```
+
+Lease storage never creates its parent directory. Pre-create an euid-owned
+directory with mode `0700` (the runtime rejects group/world-writable parents);
+`.local/` is ignored by Git and agent context retrieval.
 
 `lease-report` is read-only. A missing store emits the canonical
 `uninitialized`/blocked report, exits `1`, and creates neither the state file
@@ -212,12 +217,12 @@ GitHub Actions runs the same compile and standard-library test gates on Python
   warnings; never mutates the source; and fails closed when any record is
   rejected.
 - Durable local simulation worker leases use strict bounded JSON, hashed opaque
-  holder/idempotency values, bounded TTLs and completion markers, persisted
-  monotonic fencing, bounded POSIX locking, atomic replacement, exact release
-  and completion replay protection, and a persisted kill switch with
-  allowlisted reasons. Missing or corrupt state is never silently repaired by
-  a worker mutation. Authorization is only a snapshot: any future side effect
-  must atomically recheck holder, idempotency key, fence, expiry, and
+  holder/idempotency values, bounded TTLs and completion markers, a random
+  store epoch, persisted monotonic fencing, bounded POSIX locking, atomic
+  replacement, exact release and completion replay protection, and a persisted
+  kill switch with allowlisted reasons. Missing or corrupt state is never
+  silently repaired by a worker mutation. Authorization is only a snapshot: any future side effect
+  must atomically recheck holder, idempotency key, epoch, fence, expiry, and
   kill-switch state while holding the lease lock.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
   claims, provider calls, or account-linked persistence.

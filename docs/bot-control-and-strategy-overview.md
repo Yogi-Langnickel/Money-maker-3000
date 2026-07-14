@@ -87,10 +87,12 @@ approval.
 Before any future scheduled simulation operation, the worker must explicitly
 initialize and acquire local lease state. Active authorization requires an
 exact holder, idempotency value, current persisted fence, unexpired TTL, and a
-disengaged kill switch. A same-holder retry does not extend TTL. Exact expiry
-allows a fenced takeover; exact release replay remains idempotent until a new
-acquisition; and completion adds one global idempotency marker to a bounded
-4,096-entry set. The 2 MiB/4,096-marker limit covers roughly 1.8 years at six
+disengaged kill switch. A random store epoch is returned by acquire and must
+also match on authorize, renew, release, and complete, so recreated storage
+cannot validate credentials from an earlier incarnation. A same-holder retry
+does not extend TTL. Exact expiry allows a fenced takeover; exact release replay
+remains idempotent until a new acquisition; and completion adds one global
+idempotency marker to a bounded 4,096-entry set. The 2 MiB/4,096-marker limit covers roughly 1.8 years at six
 completed runs per day. Markers are not evicted: full capacity blocks new work,
 and a reviewed migration/archive must preserve duplicate suppression before the
 limit is reached.
@@ -102,14 +104,22 @@ lease.
 
 The read-only `simulation-worker-lease-report.v1` DTO is intentionally
 redacted: owner/idempotency values and hashes, fencing generation, state path,
-and raw state content are absent. It reports synthetic coordination state only,
-with provider calls blocked, account data and execution routes absent,
-demo/live execution blocked, and candidate intent `skip`.
+store epoch, and raw state content are absent. Locking or unsafe-filesystem
+conditions are reported as unavailable, malformed state as corrupted, and
+reversed observation time as a controlled blocked result. It reports synthetic
+coordination state only, with provider calls blocked, account data and execution
+routes absent, demo/live execution blocked, and candidate intent `skip`.
 
 Authorization is a moment-in-time snapshot. A future scheduler or side-effect
-path must atomically recheck the full lease identity, fence, expiry, and kill
+path must atomically recheck the full lease identity, epoch, fence, expiry, and kill
 switch while holding the same lock. This lease does not itself authorize or
 perform a provider call, order preview, demo execution, or live execution.
+
+The state parent must already exist, be owned by the effective user, and not be
+group/world writable; mode `0700` is recommended. The store pins and locks that
+directory before its anchored sidecar lock and never creates the parent. This
+is robust coordination among cooperating local processes, not a security
+boundary against malicious code running as the same OS user.
 
 ## Future Strategy Candidates
 

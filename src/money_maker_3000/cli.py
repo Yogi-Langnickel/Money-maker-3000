@@ -271,7 +271,7 @@ def run_lease_report(args: argparse.Namespace) -> dict[str, Any]:
     _reject_execution_mode(args.mode)
     return build_worker_lease_report(
         args.state_path,
-        now=_parse_observed_at(args.observed_at),
+        observed_at=_parse_observed_at(args.observed_at),
         lock_wait_seconds=args.lock_wait_seconds,
     )
 

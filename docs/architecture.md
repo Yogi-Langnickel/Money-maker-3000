@@ -107,6 +107,12 @@ the CLI exit non-zero after emitting the controlled report.
 `worker_leases.py` coordinates at most one local simulation worker operation.
 Initialization is explicit. Acquire, renew, release, completion, kill-switch,
 and re-enable transitions use one exact-shape, size-capped JSON state file.
+Initialization creates a random 256-bit store epoch in both state and the
+stable lock anchor only when the same locked call created a previously absent
+lock. Acquire returns the epoch; authorize, renew, release, and complete require
+the exact epoch and fence, preventing credentials from surviving deletion and
+full store recreation. A missing state file under a surviving lock is never
+reinitialized.
 Opaque holder and idempotency inputs are domain-separated SHA-256 hashes before
 persistence; raw inputs are never stored. A same-holder acquire retry is
 byte-stable and does not extend TTL. Exact expiry permits takeover with a newer
@@ -128,17 +134,27 @@ Repeated engagement is byte-stable. Re-enable records `operator-reenable`,
 advances revision/fence, and never resurrects the revoked lease.
 
 All existing-state access requires a bounded POSIX `fcntl` lock; there is no
-unlocked or non-POSIX fallback. State and lock symlinks, non-regular files,
-hardlinks, broad file modes, duplicate JSON keys, unknown fields/versions,
-invalid numbers, time reversal relative to the last persisted mutation, and
-oversized/corrupt state fail closed. Writes use a unique mode-`0600` same-dir
-temporary file, fsync it, atomically replace state, then fsync the directory.
+unlocked or non-POSIX fallback. A pinned, euid-owned, non-group/world-writable
+parent directory is locked before the anchored sidecar lock, and atomic writes
+and directory fsync use that directory descriptor. Storage never creates the
+parent: operators should pre-create a private mode-`0700` directory. State and
+lock symlinks, non-regular files, hardlinks, broad file modes, duplicate JSON
+keys, unknown fields/versions, invalid numbers, time reversal relative to the
+last persisted mutation, and oversized/corrupt state fail closed. Writes use a
+unique mode-`0600` same-dir temporary file, fsync it, atomically replace state,
+then fsync the directory.
 The stable lock inode is checked around each transition. A missing read-only
 report creates nothing and returns canonical blocked/uninitialized output.
+Locking/filesystem failures report `unavailable`; malformed state reports
+`corrupted`; and a reversed report observation time returns a controlled blocked
+DTO. Mutation time comes only from the store-owned UTC clock. This boundary
+defends cooperating same-user processes and replacement races, but cannot
+protect against a malicious process running as the same OS user and ignoring
+advisory locks or tampering with that user's files.
 
 Lease authorization is a snapshot, not permission for a later side effect.
 Any future side-effect implementation must hold the lease lock and atomically
-recheck holder, idempotency key, fence, expiry, and kill switch immediately
+recheck holder, idempotency key, epoch, fence, expiry, and kill switch immediately
 before the effect. This slice intentionally does not wire leases into the
 scheduler or ledger and adds no provider or execution behavior.
 

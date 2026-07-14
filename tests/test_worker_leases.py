@@ -9,16 +9,107 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import money_maker_3000.worker_leases as worker_leases_module
+
 from money_maker_3000.worker_leases import (
     MAX_STORE_BYTES,
     MAX_TTL_SECONDS,
-    WorkerLeaseStore,
+    WorkerLeaseStore as ProductionWorkerLeaseStore,
     WorkerLeaseStoreError,
-    build_worker_lease_report,
+    build_worker_lease_report as production_build_worker_lease_report,
 )
 
 
 NOW = datetime(2026, 7, 15, 0, 0, 0, tzinfo=timezone.utc)
+
+
+class _ManualClock:
+    def __init__(self, current: datetime = NOW) -> None:
+        self.current = current
+
+    def __call__(self) -> datetime:
+        return self.current
+
+
+class WorkerLeaseStore(ProductionWorkerLeaseStore):
+    """Test adapter that drives the production store-owned fake clock."""
+
+    def __init__(self, state_path, *, lock_wait_seconds=1.0, clock=None) -> None:
+        self.test_clock = clock or _ManualClock()
+        self.test_epoch: str | None = None
+        super().__init__(state_path, lock_wait_seconds=lock_wait_seconds, clock=self.test_clock)
+
+    def _at(self, now: datetime) -> None:
+        self.test_clock.current = now
+
+    def initialize(self, *, now: datetime = NOW):
+        self._at(now)
+        result = super().initialize()
+        self.test_epoch = result["epoch"]
+        return result
+
+    def acquire(self, *, holder, idempotency_key, ttl_seconds, now: datetime = NOW):
+        self._at(now)
+        result = super().acquire(holder=holder, idempotency_key=idempotency_key, ttl_seconds=ttl_seconds)
+        if "epoch" in result:
+            self.test_epoch = result["epoch"]
+        return result
+
+    def authorize(self, *, holder, idempotency_key, fence, epoch=None, now: datetime = NOW):
+        self._at(now)
+        return super().authorize(
+            holder=holder,
+            idempotency_key=idempotency_key,
+            epoch=epoch or self.test_epoch,
+            fence=fence,
+        )
+
+    def renew(self, *, holder, idempotency_key, fence, ttl_seconds, epoch=None, now: datetime = NOW):
+        self._at(now)
+        return super().renew(
+            holder=holder,
+            idempotency_key=idempotency_key,
+            epoch=epoch or self.test_epoch,
+            fence=fence,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def release(self, *, holder, idempotency_key, fence, epoch=None, now: datetime = NOW):
+        self._at(now)
+        return super().release(
+            holder=holder,
+            idempotency_key=idempotency_key,
+            epoch=epoch or self.test_epoch,
+            fence=fence,
+        )
+
+    def complete(self, *, holder, idempotency_key, fence, epoch=None, now: datetime = NOW):
+        self._at(now)
+        return super().complete(
+            holder=holder,
+            idempotency_key=idempotency_key,
+            epoch=epoch or self.test_epoch,
+            fence=fence,
+        )
+
+    def engage_kill_switch(self, *, reason="operator-stop", now: datetime = NOW):
+        self._at(now)
+        return super().engage_kill_switch(reason=reason)
+
+    def reenable(self, *, now: datetime = NOW):
+        self._at(now)
+        return super().reenable()
+
+    def report(self, *, now: datetime = NOW):
+        return super().report(observed_at=now)
+
+
+def build_worker_lease_report(state_path, *, now: datetime, lock_wait_seconds: float = 1.0):
+    return production_build_worker_lease_report(
+        state_path,
+        observed_at=now,
+        lock_wait_seconds=lock_wait_seconds,
+    )
 
 
 def _acquire_worker(path: str, holder: str, key: str, now: datetime, queue: multiprocessing.Queue) -> None:
@@ -39,6 +130,106 @@ def _kill_worker(path: str, now: datetime, queue: multiprocessing.Queue) -> None
         queue.put(("ok", WorkerLeaseStore(path, lock_wait_seconds=5).engage_kill_switch(now=now)))
     except Exception as exc:  # pragma: no cover - asserted in the parent process.
         queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _initialize_worker(path: str, now: datetime, start, queue: multiprocessing.Queue) -> None:
+    try:
+        start.wait()
+        result = ProductionWorkerLeaseStore(path, lock_wait_seconds=5, clock=lambda: now).initialize()
+        queue.put(("ok", result))
+    except Exception as exc:  # pragma: no cover - asserted in the parent process.
+        queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _barrier_acquire_worker(
+    path: str,
+    holder: str,
+    key: str,
+    now: datetime,
+    start,
+    queue: multiprocessing.Queue,
+) -> None:
+    try:
+        start.wait()
+        result = ProductionWorkerLeaseStore(path, lock_wait_seconds=5, clock=lambda: now).acquire(
+            holder=holder,
+            idempotency_key=key,
+            ttl_seconds=60,
+        )
+        queue.put(("ok", holder, result))
+    except Exception as exc:  # pragma: no cover - asserted in the parent process.
+        queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _barrier_kill_worker(path: str, now: datetime, start, queue: multiprocessing.Queue) -> None:
+    try:
+        start.wait()
+        result = ProductionWorkerLeaseStore(path, lock_wait_seconds=5, clock=lambda: now).engage_kill_switch(
+            reason="risk-stop"
+        )
+        queue.put(("ok", "kill", result))
+    except Exception as exc:  # pragma: no cover - asserted in the parent process.
+        queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _paused_lock_replacement_worker(path: str, entered, proceed, queue: multiprocessing.Queue) -> None:
+    original = worker_leases_module._read_state
+    paused = False
+
+    def pause_after_locks(state_path, *, directory_fd):
+        nonlocal paused
+        if not paused:
+            paused = True
+            entered.set()
+            if not proceed.wait(timeout=10):
+                raise TimeoutError("test barrier timed out")
+        return original(state_path, directory_fd=directory_fd)
+
+    try:
+        with patch("money_maker_3000.worker_leases._read_state", side_effect=pause_after_locks):
+            result = ProductionWorkerLeaseStore(path, lock_wait_seconds=5, clock=lambda: NOW).acquire(
+                holder="writer-a",
+                idempotency_key="job-a",
+                ttl_seconds=60,
+            )
+        queue.put(("ok", result))
+    except Exception as exc:  # pragma: no cover - asserted in the parent process.
+        queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _credential_operation_worker(
+    path: str,
+    operation: str,
+    holder: str,
+    key: str,
+    epoch: str,
+    fence: int,
+    now: datetime,
+    start,
+    queue: multiprocessing.Queue,
+) -> None:
+    store = ProductionWorkerLeaseStore(path, lock_wait_seconds=5, clock=lambda: now)
+    try:
+        start.wait()
+        if operation == "renew":
+            result = store.renew(
+                holder=holder,
+                idempotency_key=key,
+                epoch=epoch,
+                fence=fence,
+                ttl_seconds=60,
+            )
+        elif operation == "release":
+            result = store.release(holder=holder, idempotency_key=key, epoch=epoch, fence=fence)
+        elif operation == "complete":
+            result = store.complete(holder=holder, idempotency_key=key, epoch=epoch, fence=fence)
+        elif operation == "kill":
+            result = store.engage_kill_switch(reason="risk-stop")
+        else:  # pragma: no cover - test helper contract.
+            raise AssertionError(f"unknown operation: {operation}")
+        queue.put(("ok", operation, result))
+    except Exception as exc:  # pragma: no cover - asserted in the parent process.
+        queue.put(("error", operation, type(exc).__name__, str(exc)))
 
 
 def _crash_with_lock(lock_path: str, ready) -> None:
@@ -64,7 +255,7 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         return self.store.acquire(holder=holder, idempotency_key=key, ttl_seconds=ttl, now=now)
 
     def test_initialize_is_explicit_and_idempotent_without_silent_missing_reset(self):
-        with self.assertRaisesRegex(WorkerLeaseStoreError, "not initialized"):
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "lock is missing"):
             self.acquire()
         self.assertFalse(self.path.exists())
         self.assertFalse(self.store.lock_path.exists())
@@ -75,9 +266,88 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), original)
 
         self.path.unlink()
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "deleted"):
             self.acquire(now=NOW + timedelta(seconds=2))
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "deleted"):
+            self.store.initialize(now=NOW + timedelta(seconds=2))
         self.assertFalse(self.path.exists())
+
+    def test_epoch_prevents_deleted_state_and_full_store_recreation_aba(self):
+        self.initialize()
+        first = self.acquire()
+        old_epoch = first["epoch"]
+        old_fence = first["fence"]
+        lock_anchor = self.store.lock_path.read_bytes()
+
+        self.path.unlink()
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "deleted"):
+            self.store.initialize(now=NOW + timedelta(seconds=1))
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self.store.lock_path.read_bytes(), lock_anchor)
+
+        self.store.lock_path.unlink()
+        recreated = self.store.initialize(now=NOW + timedelta(seconds=2))
+        self.assertNotEqual(recreated["epoch"], old_epoch)
+        replacement = self.acquire(now=NOW + timedelta(seconds=2))
+        self.assertEqual(replacement["fence"], 1)
+        self.assertNotEqual(replacement["epoch"], old_epoch)
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "epoch"):
+            self.store.authorize(
+                holder="worker-a",
+                idempotency_key="job-a",
+                epoch=old_epoch,
+                fence=old_fence,
+                now=NOW + timedelta(seconds=2),
+            )
+
+    def test_state_deletion_cannot_erase_kill_switch_or_completion_under_surviving_lock(self):
+        self.initialize()
+        lease = self.acquire()
+        self.store.complete(
+            holder="worker-a",
+            idempotency_key="job-a",
+            epoch=lease["epoch"],
+            fence=lease["fence"],
+            now=NOW + timedelta(seconds=1),
+        )
+        self.store.engage_kill_switch(reason="risk-stop", now=NOW + timedelta(seconds=2))
+        anchor = self.store.lock_path.read_bytes()
+        self.path.unlink()
+        for action in (
+            lambda: self.store.initialize(now=NOW + timedelta(seconds=3)),
+            lambda: self.acquire(holder="worker-b", key="job-b", now=NOW + timedelta(seconds=3)),
+        ):
+            with self.assertRaisesRegex(WorkerLeaseStoreError, "deleted"):
+                action()
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self.store.lock_path.read_bytes(), anchor)
+
+    @unittest.skipUnless("spawn" in multiprocessing.get_all_start_methods(), "requires spawn multiprocessing")
+    def test_concurrent_initializers_share_one_epoch_without_reset(self):
+        context = multiprocessing.get_context("spawn")
+        start = context.Event()
+        queue = context.Queue()
+        processes = [
+            context.Process(target=_initialize_worker, args=(os.fspath(self.path), NOW, start, queue))
+            for _ in range(6)
+        ]
+        for process in processes:
+            process.start()
+        start.set()
+        for process in processes:
+            process.join(timeout=15)
+        self.assertTrue(all(process.exitcode == 0 for process in processes))
+        results = [queue.get(timeout=2) for _ in processes]
+        self.assertTrue(all(result[0] == "ok" for result in results), results)
+        statuses = [result[1]["status"] for result in results]
+        epochs = {result[1]["epoch"] for result in results}
+        self.assertEqual(statuses.count("initialized"), 1)
+        self.assertEqual(statuses.count("already-initialized"), 5)
+        self.assertEqual(len(epochs), 1)
+        state = json.loads(self.path.read_text(encoding="utf-8"))
+        anchor = json.loads(self.store.lock_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["epoch"], anchor["epoch"])
+        self.assertEqual(state["epoch"], next(iter(epochs)))
 
     def test_acquire_busy_same_holder_retry_and_exact_expiry_takeover(self):
         self.initialize()
@@ -228,6 +498,41 @@ class WorkerLeaseStoreTests(unittest.TestCase):
                 now=NOW + timedelta(seconds=4),
             )
 
+    def test_exact_old_completion_replay_bypasses_only_clock_reversal(self):
+        self.initialize()
+        first = self.acquire(holder="worker-a", key="job-a", now=NOW)
+        self.store.complete(
+            holder="worker-a",
+            idempotency_key="job-a",
+            fence=first["fence"],
+            now=NOW + timedelta(seconds=1),
+        )
+        second = self.acquire(holder="worker-b", key="job-b", now=NOW + timedelta(seconds=2))
+        self.store.complete(
+            holder="worker-b",
+            idempotency_key="job-b",
+            fence=second["fence"],
+            now=NOW + timedelta(seconds=3),
+        )
+        persisted = self.path.read_bytes()
+        replay = self.store.complete(
+            holder="worker-a",
+            idempotency_key="job-a",
+            epoch=first["epoch"],
+            fence=first["fence"],
+            now=NOW + timedelta(seconds=1),
+        )
+        self.assertEqual(replay, {"status": "already-completed", "completed": True})
+        self.assertEqual(self.path.read_bytes(), persisted)
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "precedes"):
+            self.store.complete(
+                holder="worker-x",
+                idempotency_key="job-a",
+                epoch=first["epoch"],
+                fence=first["fence"],
+                now=NOW + timedelta(seconds=1),
+            )
+
     def test_completion_capacity_fails_closed_without_evicting_markers(self):
         with patch("money_maker_3000.worker_leases.MAX_COMPLETION_MARKERS", 2):
             self.initialize()
@@ -350,7 +655,7 @@ class WorkerLeaseStoreTests(unittest.TestCase):
             with self.assertRaises(WorkerLeaseStoreError):
                 invalid_call()
             self.assertEqual(self.path.read_bytes(), original)
-        with self.assertRaises(WorkerLeaseStoreError):
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "lock wait must"):
             WorkerLeaseStore(self.path, lock_wait_seconds=float("nan"))
 
         precise_path = Path(self.temporary.name) / "precise-time.json"
@@ -363,6 +668,22 @@ class WorkerLeaseStoreTests(unittest.TestCase):
                 ttl_seconds=1,
                 now=NOW + timedelta(microseconds=500),
             )
+
+    def test_mutation_time_is_store_owned_and_cannot_be_poisoned_by_caller(self):
+        clock = _ManualClock(NOW)
+        store = ProductionWorkerLeaseStore(self.path, clock=clock)
+        store.initialize()
+        before = self.path.read_bytes()
+        with self.assertRaises(TypeError):
+            store.acquire(
+                holder="worker",
+                idempotency_key="job",
+                ttl_seconds=60,
+                now=NOW + timedelta(days=3650),
+            )
+        self.assertEqual(self.path.read_bytes(), before)
+        acquired = store.acquire(holder="worker", idempotency_key="job", ttl_seconds=60)
+        self.assertEqual(acquired["expiresAt"], "2026-07-15T00:01:00.000000Z")
 
     def test_strict_loaded_state_scalar_nested_and_ttl_invariants(self):
         self.initialize()
@@ -399,7 +720,7 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         path.write_text("{bad-json}\n", encoding="utf-8")
         os.chmod(path, 0o600)
         store = WorkerLeaseStore(path)
-        with self.assertRaisesRegex(WorkerLeaseStoreError, "not initialized"):
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "lock is missing"):
             store.initialize(now=NOW)
         self.assertFalse(store.lock_path.exists())
         self.assertEqual(path.read_text(encoding="utf-8"), "{bad-json}\n")
@@ -410,6 +731,8 @@ class WorkerLeaseStoreTests(unittest.TestCase):
             b'{"version":1,"version":1}\n',
             json.dumps({"version": 1, "unknown": True}).encode(),
             b'{"version":NaN}\n',
+            b'{"version":' + (b"9" * 5000) + b"}\n",
+            b"\xff\xfe\n",
             (b"[" * 2000) + (b"]" * 2000),
             b"x" * (MAX_STORE_BYTES + 1),
         )
@@ -425,6 +748,7 @@ class WorkerLeaseStoreTests(unittest.TestCase):
                 self.assertEqual(path.read_bytes(), original)
                 report = store.report(now=NOW)
                 self.assertEqual(report["integrity"]["state"], "corrupted")
+                self.assertEqual(report["integrity"]["issueCode"], "state-invalid")
                 self.assertEqual(path.read_bytes(), original)
 
     def test_state_and_lock_reject_symlink_fifo_and_hardlink_without_mutation(self):
@@ -435,15 +759,17 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         state_link.symlink_to(self.path)
         linked_store = WorkerLeaseStore(state_link)
         linked_lock = linked_store.lock_path
-        linked_lock.write_bytes(b"")
-        with self.assertRaises(WorkerLeaseStoreError):
+        linked_lock.write_bytes(self.store.lock_path.read_bytes())
+        os.chmod(linked_lock, 0o600)
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "lease state must"):
             linked_store.acquire(holder="w", idempotency_key="k", ttl_seconds=1, now=NOW)
 
         hardlink = Path(self.temporary.name) / "state-hardlink.json"
         os.link(self.path, hardlink)
         hard_store = WorkerLeaseStore(hardlink)
-        hard_store.lock_path.write_bytes(b"")
-        with self.assertRaises(WorkerLeaseStoreError):
+        hard_store.lock_path.write_bytes(self.store.lock_path.read_bytes())
+        os.chmod(hard_store.lock_path, 0o600)
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "lease state must"):
             hard_store.acquire(holder="w", idempotency_key="k", ttl_seconds=1, now=NOW)
         self.assertEqual(self.path.read_bytes(), original)
 
@@ -451,8 +777,9 @@ class WorkerLeaseStoreTests(unittest.TestCase):
             fifo = Path(self.temporary.name) / "state-fifo"
             os.mkfifo(fifo)
             fifo_store = WorkerLeaseStore(fifo)
-            fifo_store.lock_path.write_bytes(b"")
-            with self.assertRaises(WorkerLeaseStoreError):
+            fifo_store.lock_path.write_bytes(self.store.lock_path.read_bytes())
+            os.chmod(fifo_store.lock_path, 0o600)
+            with self.assertRaisesRegex(WorkerLeaseStoreError, "lease state must"):
                 fifo_store.acquire(holder="w", idempotency_key="k", ttl_seconds=1, now=NOW)
 
         separate = Path(self.temporary.name) / "separate.json"
@@ -495,21 +822,65 @@ class WorkerLeaseStoreTests(unittest.TestCase):
 
     def test_existing_reports_redact_identity_fence_path_and_content(self):
         self.initialize()
-        self.acquire(holder="private-owner", key="private-operation")
+        acquired = self.acquire(holder="private-owner", key="private-operation")
         report = self.store.report(now=NOW)
         serialized = json.dumps(report, sort_keys=True)
         self.assertEqual(report["workerGate"]["state"], "busy")
-        for secret in ("private-owner", "private-operation", os.fspath(self.path), "holderHash"):
+        for secret in (
+            "private-owner",
+            "private-operation",
+            acquired["epoch"],
+            os.fspath(self.path),
+            "holderHash",
+        ):
             self.assertNotIn(secret, serialized)
         self.assertEqual(report["redaction"]["fence"], "absent")
+        self.assertEqual(report["redaction"]["epoch"], "absent")
 
     def test_report_rejects_time_reversal_and_broad_file_modes(self):
         self.initialize()
         self.acquire(now=NOW + timedelta(seconds=1))
-        with self.assertRaisesRegex(WorkerLeaseStoreError, "precedes"):
-            self.store.report(now=NOW)
+        reversed_report = self.store.report(now=NOW)
+        self.assertEqual(reversed_report["integrity"]["state"], "unavailable")
+        self.assertEqual(reversed_report["integrity"]["issueCode"], "observed-time-reversed")
         os.chmod(self.path, 0o644)
         self.assertEqual(self.store.report(now=NOW + timedelta(seconds=1))["integrity"]["state"], "corrupted")
+
+    def test_report_classifies_locking_failures_as_unavailable(self):
+        import fcntl
+
+        self.initialize()
+        fd = os.open(self.store.lock_path, os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            report = WorkerLeaseStore(self.path, lock_wait_seconds=0.02).report(now=NOW)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        self.assertEqual(report["integrity"]["state"], "unavailable")
+        self.assertEqual(report["integrity"]["issueCode"], "lock-timeout")
+
+        with patch("money_maker_3000.worker_leases.fcntl", None):
+            no_locking = self.store.report(now=NOW)
+        self.assertEqual(no_locking["integrity"]["state"], "unavailable")
+        self.assertEqual(no_locking["integrity"]["issueCode"], "locking-unavailable")
+
+        self.store.lock_path.unlink()
+        self.store.lock_path.symlink_to(self.path)
+        unsafe = self.store.report(now=NOW)
+        self.assertEqual(unsafe["integrity"]["state"], "unavailable")
+        self.assertEqual(unsafe["integrity"]["issueCode"], "unsafe-lock")
+        self.assertEqual(unsafe["integrity"]["rawContent"], "absent")
+
+    def test_untrusted_parent_is_unavailable_and_never_mutated(self):
+        os.chmod(self.path.parent, 0o777)
+        report = self.store.report(now=NOW)
+        self.assertEqual(report["integrity"]["state"], "unavailable")
+        self.assertEqual(report["integrity"]["issueCode"], "unsafe-parent")
+        with self.assertRaisesRegex(WorkerLeaseStoreError, "euid-owned"):
+            self.store.initialize(now=NOW)
+        self.assertFalse(self.path.exists())
+        self.assertFalse(self.store.lock_path.exists())
 
     @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
     def test_lock_wait_is_bounded(self):
@@ -521,7 +892,7 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         try:
             contender = WorkerLeaseStore(self.path, lock_wait_seconds=0.02)
             started = datetime.now(timezone.utc)
-            with self.assertRaisesRegex(TimeoutError, "timed out"):
+            with self.assertRaisesRegex(WorkerLeaseStoreError, "timed out"):
                 contender.acquire(holder="worker", idempotency_key="job", ttl_seconds=1, now=NOW)
             elapsed = (datetime.now(timezone.utc) - started).total_seconds()
             self.assertLess(elapsed, 1.0)
@@ -552,65 +923,218 @@ class WorkerLeaseStoreTests(unittest.TestCase):
                 path = Path(self.temporary.name) / f"race-{label}.json"
                 WorkerLeaseStore(path).initialize(now=NOW)
                 queue = context.Queue()
+                start = context.Event()
                 processes = [
-                    context.Process(target=_acquire_worker, args=(os.fspath(path), holder, key, at, queue))
+                    context.Process(
+                        target=_barrier_acquire_worker,
+                        args=(os.fspath(path), holder, key, at, start, queue),
+                    )
                     for holder, key in zip(holders, keys, strict=True)
                 ]
                 for process in processes:
                     process.start()
+                start.set()
                 for process in processes:
                     process.join(timeout=10)
                 self.assertTrue(all(process.exitcode == 0 for process in processes))
                 results = [queue.get(timeout=2) for _ in processes]
                 self.assertTrue(all(result[0] == "ok" for result in results), results)
                 histogram: dict[str, int] = {}
-                for _, result in results:
+                for _, _, result in results:
                     histogram[result["status"]] = histogram.get(result["status"], 0) + 1
                 self.assertEqual(histogram, expected_statuses)
+                persisted = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["fenceGeneration"], 1)
+                self.assertEqual(persisted["lease"]["fence"], 1)
                 if label == "same-owner":
-                    self.assertEqual(len({result[1]["fence"] for result in results}), 1)
+                    self.assertEqual(len({result[2]["fence"] for result in results}), 1)
+                    self.assertEqual(
+                        persisted["lease"]["holderHash"],
+                        worker_leases_module._opaque_hash("holder", "worker-same"),
+                    )
+                else:
+                    self.assertIn(persisted["lease"]["holderHash"], {
+                        worker_leases_module._opaque_hash("holder", holder) for holder in holders
+                    })
 
         expiry_path = Path(self.temporary.name) / "race-expiry.json"
         expiry_store = WorkerLeaseStore(expiry_path)
         expiry_store.initialize(now=NOW)
         old = expiry_store.acquire(holder="old", idempotency_key="old", ttl_seconds=1, now=NOW)
         queue = context.Queue()
+        start = context.Event()
         processes = [
             context.Process(
-                target=_acquire_worker,
-                args=(os.fspath(expiry_path), f"new-{index}", f"new-{index}", NOW + timedelta(seconds=1), queue),
+                target=_barrier_acquire_worker,
+                args=(
+                    os.fspath(expiry_path),
+                    f"new-{index}",
+                    f"new-{index}",
+                    NOW + timedelta(seconds=1),
+                    start,
+                    queue,
+                ),
             )
             for index in range(8)
         ]
         for process in processes:
             process.start()
+        start.set()
         for process in processes:
             process.join(timeout=10)
         results = [queue.get(timeout=2) for _ in processes]
-        acquired = [result[1] for result in results if result[0] == "ok" and result[1]["status"] == "acquired"]
+        self.assertTrue(all(process.exitcode == 0 for process in processes))
+        self.assertTrue(all(result[0] == "ok" for result in results), results)
+        histogram: dict[str, int] = {}
+        for _, _, result in results:
+            histogram[result["status"]] = histogram.get(result["status"], 0) + 1
+        self.assertEqual(histogram, {"acquired": 1, "busy": 7})
+        acquired = [result[2] for result in results if result[2]["status"] == "acquired"]
         self.assertEqual(len(acquired), 1)
         self.assertGreater(acquired[0]["fence"], old["fence"])
+        persisted = json.loads(expiry_path.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["fenceGeneration"], acquired[0]["fence"])
+        self.assertEqual(persisted["lease"]["fence"], acquired[0]["fence"])
 
     @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
     def test_multiprocessing_kill_race_ends_revoked_and_fenced(self):
         self.initialize()
         context = multiprocessing.get_context("fork")
         queue = context.Queue()
+        start = context.Event()
         at = NOW + timedelta(seconds=1)
         processes = [
-            context.Process(target=_acquire_worker, args=(os.fspath(self.path), "worker", "job", at, queue)),
-            context.Process(target=_kill_worker, args=(os.fspath(self.path), at, queue)),
+            context.Process(
+                target=_barrier_acquire_worker,
+                args=(os.fspath(self.path), "worker", "job", at, start, queue),
+            ),
+            context.Process(target=_barrier_kill_worker, args=(os.fspath(self.path), at, start, queue)),
         ]
         for process in processes:
             process.start()
+        start.set()
         for process in processes:
             process.join(timeout=10)
         results = [queue.get(timeout=2) for _ in processes]
+        self.assertTrue(all(process.exitcode == 0 for process in processes))
         self.assertTrue(all(result[0] == "ok" for result in results), results)
+        statuses = {result[1]: result[2]["status"] for result in results}
+        self.assertEqual(statuses["kill"], "engaged")
+        self.assertIn(statuses["worker"], {"acquired", "kill-switch-blocked"})
         self.assertEqual(self.store.report(now=at)["workerGate"]["state"], "kill-switch-blocked")
         state = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertIsNone(state["lease"])
         self.assertTrue(state["killSwitch"]["engaged"])
+        self.assertGreaterEqual(state["fenceGeneration"], 1)
+
+    @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
+    def test_lock_replacement_cannot_acknowledge_a_lost_mutation(self):
+        self.initialize()
+        context = multiprocessing.get_context("fork")
+        entered = context.Event()
+        proceed = context.Event()
+        queue = context.Queue()
+        writer_a = context.Process(
+            target=_paused_lock_replacement_worker,
+            args=(os.fspath(self.path), entered, proceed, queue),
+        )
+        writer_a.start()
+        self.assertTrue(entered.wait(timeout=5))
+
+        replacement = self.store.lock_path.with_name("replacement.lock")
+        replacement.write_bytes(self.store.lock_path.read_bytes())
+        os.chmod(replacement, 0o600)
+        os.replace(replacement, self.store.lock_path)
+
+        start_b = context.Event()
+        writer_b = context.Process(
+            target=_barrier_acquire_worker,
+            args=(os.fspath(self.path), "writer-b", "job-b", NOW, start_b, queue),
+        )
+        writer_b.start()
+        start_b.set()
+        proceed.set()
+        writer_a.join(timeout=10)
+        writer_b.join(timeout=10)
+        self.assertEqual(writer_a.exitcode, 0)
+        self.assertEqual(writer_b.exitcode, 0)
+        results = [queue.get(timeout=2) for _ in range(2)]
+        errors = [result for result in results if result[0] == "error"]
+        successes = [result for result in results if result[0] == "ok"]
+        self.assertEqual(len(errors), 1, results)
+        self.assertRegex(errors[0][2], r"lease lock (changed|must be a regular single-link file)")
+        self.assertEqual(len(successes), 1, results)
+        self.assertEqual(successes[0][2]["status"], "acquired")
+
+        state = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(state["lease"]["holderHash"], worker_leases_module._opaque_hash("holder", "writer-b"))
+        self.assertEqual(state["lease"]["fence"], successes[0][2]["fence"])
+        self.assertEqual(state["fenceGeneration"], successes[0][2]["fence"])
+
+    @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
+    def test_credential_transition_races_are_serializable(self):
+        context = multiprocessing.get_context("fork")
+        for left, right in (
+            ("renew", "release"),
+            ("complete", "release"),
+            ("renew", "kill"),
+            ("release", "kill"),
+        ):
+            with self.subTest(left=left, right=right):
+                path = Path(self.temporary.name) / f"race-{left}-{right}.json"
+                store = WorkerLeaseStore(path)
+                store.initialize(now=NOW)
+                lease = store.acquire(holder="worker", idempotency_key="job", ttl_seconds=60, now=NOW)
+                start = context.Event()
+                queue = context.Queue()
+                processes = [
+                    context.Process(
+                        target=_credential_operation_worker,
+                        args=(
+                            os.fspath(path),
+                            operation,
+                            "worker",
+                            "job",
+                            lease["epoch"],
+                            lease["fence"],
+                            NOW + timedelta(seconds=1),
+                            start,
+                            queue,
+                        ),
+                    )
+                    for operation in (left, right)
+                ]
+                for process in processes:
+                    process.start()
+                start.set()
+                for process in processes:
+                    process.join(timeout=10)
+                self.assertTrue(all(process.exitcode == 0 for process in processes))
+                results = [queue.get(timeout=2) for _ in processes]
+                self.assertTrue(all(result[0] == "ok" for result in results), results)
+                by_operation = {result[1]: result[2] for result in results}
+                state = json.loads(path.read_text(encoding="utf-8"))
+                self.assertIsNone(state["lease"])
+
+                if "kill" in by_operation:
+                    self.assertEqual(by_operation["kill"]["status"], "engaged")
+                    self.assertTrue(state["killSwitch"]["engaged"])
+                    other = left if right == "kill" else right
+                    if other == "renew":
+                        self.assertIn(by_operation[other]["status"], {"renewed", "kill-switch-blocked"})
+                    else:
+                        self.assertIn(by_operation[other]["status"], {"released", "kill-switch-blocked"})
+                elif left == "renew":
+                    self.assertEqual(by_operation["release"]["status"], "released")
+                    self.assertIn(by_operation["renew"]["status"], {"renewed", "not-held"})
+                    self.assertIsNotNone(state["lastRelease"])
+                else:
+                    successful_terminal = sum(
+                        bool(by_operation[operation].get(f"{operation}d"))
+                        for operation in ("complete", "release")
+                    )
+                    self.assertEqual(successful_terminal, 1)
+                    self.assertEqual(bool(state["completions"]), by_operation["complete"]["completed"])
 
     @unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(), "requires fork multiprocessing")
     def test_process_crash_releases_flock(self):
@@ -652,6 +1176,18 @@ class WorkerLeaseStoreTests(unittest.TestCase):
         before = self.path.read_bytes()
         with patch("money_maker_3000.worker_leases.os.replace", side_effect=OSError("injected replace failure")):
             with self.assertRaisesRegex(OSError, "injected replace failure"):
+                self.acquire()
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(list(self.path.parent.glob(f".{self.path.name}.tmp-*")), [])
+
+    def test_pre_replace_temporary_fsync_failure_preserves_prior_canonical_bytes(self):
+        self.initialize()
+        before = self.path.read_bytes()
+        with patch(
+            "money_maker_3000.worker_leases.os.fsync",
+            side_effect=OSError("injected temporary fsync failure"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected temporary fsync failure"):
                 self.acquire()
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(list(self.path.parent.glob(f".{self.path.name}.tmp-*")), [])

@@ -900,9 +900,9 @@ class CliTests(unittest.TestCase):
             self.assertFalse(state_path.exists())
             self.assertFalse(WorkerLeaseStore(state_path).lock_path.exists())
 
-            store = WorkerLeaseStore(state_path)
-            store.initialize(now=now)
-            store.acquire(holder="private-worker", idempotency_key="private-job", ttl_seconds=60, now=now)
+            store = WorkerLeaseStore(state_path, clock=lambda: now)
+            store.initialize()
+            store.acquire(holder="private-worker", idempotency_key="private-job", ttl_seconds=60)
             before = state_path.read_bytes()
             active = self.run_cli("lease-report", str(state_path), "--observed-at", observed_at)
             self.assertEqual(state_path.read_bytes(), before)
@@ -936,6 +936,46 @@ class CliTests(unittest.TestCase):
         self.assertEqual(naive.stdout, "")
         self.assertEqual(execute.returncode, 1)
         self.assertIn("execution mode is disabled", execute.stderr)
+
+    def test_lease_report_cli_bounds_corrupt_integers_and_controls_reversed_time(self):
+        now = datetime(2026, 7, 15, 0, 0, 1, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "leases.json"
+            WorkerLeaseStore(state_path, clock=lambda: now).initialize()
+
+            reversed_result = self.run_cli(
+                "lease-report",
+                str(state_path),
+                "--observed-at",
+                "2026-07-15T00:00:00Z",
+            )
+
+            oversized_integer = b'{"version":' + (b"9" * 5000) + b"}\n"
+            state_path.write_bytes(oversized_integer)
+            before = state_path.read_bytes()
+            corrupt_result = self.run_cli(
+                "lease-report",
+                str(state_path),
+                "--observed-at",
+                "2026-07-15T00:00:01Z",
+            )
+            self.assertEqual(state_path.read_bytes(), before)
+
+        self.assertEqual(reversed_result.returncode, 1)
+        self.assertEqual(reversed_result.stderr, "")
+        reversed_payload = json.loads(reversed_result.stdout)
+        self.assertEqual(reversed_payload["integrity"]["state"], "unavailable")
+        self.assertEqual(reversed_payload["integrity"]["issueCode"], "observed-time-reversed")
+        self.assertEqual(reversed_payload["workerGate"]["state"], "blocked")
+
+        self.assertEqual(corrupt_result.returncode, 1)
+        self.assertEqual(corrupt_result.stderr, "")
+        corrupt_payload = json.loads(corrupt_result.stdout)
+        self.assertEqual(corrupt_payload["integrity"]["state"], "corrupted")
+        self.assertEqual(corrupt_payload["integrity"]["issueCode"], "state-invalid")
+        serialized = json.dumps(corrupt_payload)
+        self.assertNotIn("9" * 100, serialized)
+        self.assertNotIn(str(state_path), serialized)
 
 
 if __name__ == "__main__":
