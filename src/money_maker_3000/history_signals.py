@@ -10,8 +10,9 @@ from money_maker_3000.contracts import (
 )
 from money_maker_3000.market_history import Bar
 
-DIAGNOSTICS_VERSION = "strategy-history-diagnostics.v2"
-WALK_FORWARD_VERSION = "strategy-history-walk-forward.v1"
+DIAGNOSTICS_VERSION = "strategy-history-diagnostics.v3"
+WALK_FORWARD_VERSION = "strategy-history-walk-forward.v2"
+MAX_WALK_FORWARD_FOLDS = 5
 
 
 def _parameter(strategy_id: str, supplied: dict[str, Any], name: str) -> Any:
@@ -151,38 +152,63 @@ def _walk_forward(
         "candidateIntent": "skip",
         "performanceClaims": "historical-state-coverage-only-no-pnl-or-profitability-claim",
     }
+
+    def unavailable(state: str) -> dict[str, Any]:
+        return {
+            **base,
+            "state": state,
+            "eligibleObservationCount": 0,
+            "firstObservationDate": None,
+            "lastObservationDate": None,
+            "stateCounts": {},
+            "transitionCount": 0,
+            "foldCount": 0,
+            "folds": [],
+        }
+
     if strategy_id not in {"volatility-band-accumulator", "slow-trend-allocation"}:
-        return {
-            **base,
-            "state": "not-applicable",
-            "eligibleObservationCount": 0,
-            "firstObservationDate": None,
-            "lastObservationDate": None,
-            "stateCounts": {},
-            "transitionCount": 0,
-        }
+        return unavailable("not-applicable")
     if len(bars) < required_bar_count:
-        return {
-            **base,
-            "state": "insufficient-history",
-            "eligibleObservationCount": 0,
-            "firstObservationDate": None,
-            "lastObservationDate": None,
-            "stateCounts": {},
-            "transitionCount": 0,
-        }
+        return unavailable("insufficient-history")
 
     evaluator = _volatility_band if strategy_id == "volatility-band-accumulator" else _slow_trend
     states: list[str] = []
+    observation_dates: list[str] = []
     first_observation_date = bars[required_bar_count - 1].date
     for endpoint in range(required_bar_count, len(bars) + 1):
         bounded_window = bars[endpoint - required_bar_count:endpoint]
         states.append(evaluator(bounded_window, parameters)["state"])
+        observation_dates.append(bounded_window[-1].date)
 
     state_counts: dict[str, int] = {}
     for state in states:
         state_counts[state] = state_counts.get(state, 0) + 1
     transition_count = sum(previous != current for previous, current in zip(states, states[1:]))
+
+    fold_count = min(MAX_WALK_FORWARD_FOLDS, len(states))
+    base_fold_size, extra_observations = divmod(len(states), fold_count)
+    folds: list[dict[str, Any]] = []
+    start = 0
+    for fold_index in range(fold_count):
+        fold_size = base_fold_size + (1 if fold_index < extra_observations else 0)
+        end = start + fold_size
+        fold_states = states[start:end]
+        fold_state_counts: dict[str, int] = {}
+        for state in fold_states:
+            fold_state_counts[state] = fold_state_counts.get(state, 0) + 1
+        folds.append(
+            {
+                "foldIndex": fold_index,
+                "observationCount": fold_size,
+                "firstObservationDate": observation_dates[start],
+                "lastObservationDate": observation_dates[end - 1],
+                "stateCounts": dict(sorted(fold_state_counts.items())),
+                "transitionCount": sum(
+                    previous != current for previous, current in zip(fold_states, fold_states[1:])
+                ),
+            }
+        )
+        start = end
     return {
         **base,
         "state": "available",
@@ -191,6 +217,8 @@ def _walk_forward(
         "lastObservationDate": bars[-1].date,
         "stateCounts": dict(sorted(state_counts.items())),
         "transitionCount": transition_count,
+        "foldCount": fold_count,
+        "folds": folds,
     }
 
 

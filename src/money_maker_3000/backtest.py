@@ -11,7 +11,9 @@ from money_maker_3000.contracts import (
     SIMULATION_STRATEGY_PARAMETER_SCHEMAS,
     build_allocation_policy,
     merge_simulation_config,
+    safe_strategy_parameters_for_output,
     utc_iso,
+    validate_strategy_parameters,
 )
 from money_maker_3000.engine import CONFIG_VERSION, build_simulation_run
 from money_maker_3000.history_signals import build_strategy_history_diagnostics
@@ -383,6 +385,129 @@ def build_historical_fixture_backtest(
     }
 
 
+def _canonical_strategy_history_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    metadata = report.get("metadata")
+    history = report.get("history")
+    runs = report.get("runs")
+    scenario_summaries = report.get("scenarioSummaries")
+    if (
+        not isinstance(metadata, dict)
+        or not isinstance(history, dict)
+        or not isinstance(runs, list)
+        or not runs
+        or not isinstance(scenario_summaries, list)
+        or len(scenario_summaries) != len(runs)
+    ):
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    strategy_id = metadata.get("strategyId")
+    if strategy_id not in SIMULATION_STRATEGY_PARAMETER_SCHEMAS:
+        raise ValueError("offline fixture batch authoritative history is invalid")
+
+    expected_bar_keys = {"symbol", "date", "open", "high", "low", "close", "volume", "source"}
+    bars: list[Bar] = []
+    strategy_parameters: dict[str, Any] | None = None
+    for run in runs:
+        intent = run.get("intentDiagnostics") if isinstance(run, dict) else None
+        bar = intent.get("bar") if isinstance(intent, dict) else None
+        parameters = intent.get("strategyParameters") if isinstance(intent, dict) else None
+        if (
+            not isinstance(intent, dict)
+            or intent.get("strategyId") != strategy_id
+            or not isinstance(bar, dict)
+            or set(bar) != expected_bar_keys
+            or not isinstance(parameters, dict)
+            or not isinstance(bar["symbol"], str)
+            or not isinstance(bar["date"], str)
+            or not isinstance(bar["source"], str)
+            or any(
+                isinstance(bar[key], bool)
+                or not isinstance(bar[key], (int, float))
+                or not math.isfinite(float(bar[key]))
+                for key in ("open", "high", "low", "close", "volume")
+            )
+        ):
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        parameter_validation = validate_strategy_parameters(strategy_id, parameters)
+        safe_parameters = safe_strategy_parameters_for_output(strategy_id, parameters)
+        if not parameter_validation.ok or parameters != safe_parameters:
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        if strategy_parameters is None:
+            strategy_parameters = parameters
+        elif parameters != strategy_parameters:
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        bars.append(Bar(**bar))
+
+    if (
+        len(bars) != metadata.get("rowCount")
+        or len(bars) != history.get("barCount")
+        or bars[0].symbol != history.get("symbol")
+        or bars[0].date != metadata.get("firstDate")
+        or bars[-1].date != metadata.get("lastDate")
+    ):
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    canonical = build_strategy_history_diagnostics(
+        bars,
+        strategy_id=strategy_id,
+        strategy_parameters=strategy_parameters,
+    )
+    if canonical["state"] == "invalid-history":
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    parameter_error_prefixes = (
+        "strategy parameter ",
+        "strategy parameters ",
+        "unsupported strategy parameters ",
+    )
+    parameter_states: set[str] = set()
+    config_valid_count = 0
+    config_invalid_count = 0
+    config_error_histogram: dict[str, int] = {}
+    for summary in scenario_summaries:
+        config = summary.get("config") if isinstance(summary, dict) else None
+        errors = config.get("errors") if isinstance(config, dict) else None
+        ok = config.get("ok") if isinstance(config, dict) else None
+        if (
+            not isinstance(ok, bool)
+            or not isinstance(errors, list)
+            or any(not isinstance(error, str) for error in errors)
+            or ok != (len(errors) == 0)
+        ):
+            raise ValueError("offline fixture batch authoritative history is invalid")
+        config_valid_count += 1 if ok else 0
+        config_invalid_count += 0 if ok else 1
+        for error in errors:
+            config_error_histogram[error] = config_error_histogram.get(error, 0) + 1
+        parameter_states.add(
+            "invalid-defaulted"
+            if any(error.startswith(parameter_error_prefixes) for error in errors)
+            else "valid"
+        )
+    if len(parameter_states) != 1:
+        raise ValueError("offline fixture batch authoritative history is invalid")
+    summary = report.get("summary")
+    reported_error_histogram = summary.get("configErrorHistogram") if isinstance(summary, dict) else None
+    if (
+        not isinstance(summary, dict)
+        or not isinstance(summary.get("configValidCount"), int)
+        or isinstance(summary.get("configValidCount"), bool)
+        or not isinstance(summary.get("configInvalidCount"), int)
+        or isinstance(summary.get("configInvalidCount"), bool)
+        or not isinstance(reported_error_histogram, dict)
+        or any(
+            not isinstance(error, str)
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count <= 0
+            for error, count in reported_error_histogram.items()
+        )
+        or summary.get("configValidCount") != config_valid_count
+        or summary.get("configInvalidCount") != config_invalid_count
+        or reported_error_histogram != config_error_histogram
+    ):
+        raise ValueError("offline fixture batch authoritative configuration is invalid")
+    canonical["parameterState"] = parameter_states.pop()
+    return canonical
+
+
 def build_offline_fixture_batch_diagnostics(
     *,
     reports: Iterable[dict[str, Any]],
@@ -413,7 +538,11 @@ def build_offline_fixture_batch_diagnostics(
         row_count = int(metadata["rowCount"])
         event_count = int(report["summary"]["eventCount"])
         blocked_count = int(report["summary"]["blockedCount"])
-        strategy_history = _validated_strategy_history_diagnostics(report.get("strategyHistoryDiagnostics"))
+        canonical_strategy_history = _canonical_strategy_history_from_report(report)
+        strategy_history = _validated_strategy_history_diagnostics(
+            report.get("strategyHistoryDiagnostics"),
+            canonical=canonical_strategy_history,
+        )
         total_rows += row_count
         total_events += event_count
         blocked_events += blocked_count
@@ -501,7 +630,7 @@ def _merge_histogram(target: dict[str, int], source: dict[str, int]) -> None:
         target[key] = target.get(key, 0) + int(value)
 
 
-def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
+def _validated_strategy_history_diagnostics(value: Any, *, canonical: dict[str, Any]) -> dict[str, Any]:
     ordered_keys = (
         "dtoVersion",
         "strategyId",
@@ -521,7 +650,7 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != set(ordered_keys):
         raise ValueError("offline fixture batch strategy history diagnostics are invalid")
     if (
-        value["dtoVersion"] != "strategy-history-diagnostics.v2"
+        value["dtoVersion"] != "strategy-history-diagnostics.v3"
         or value["providerCalls"] != "blocked"
         or value["accountData"] != "absent"
         or value["executionRoutes"] != "absent"
@@ -663,8 +792,9 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         bar_count=value["barCount"],
         required_bar_count=value["requiredBarCount"],
         latest_date=latest_date,
+        canonical=canonical["walkForward"],
     )
-    return {
+    validated = {
         key: (
             dict(metrics)
             if key == "metrics" and metrics is not None
@@ -674,6 +804,9 @@ def _validated_strategy_history_diagnostics(value: Any) -> dict[str, Any]:
         )
         for key in ordered_keys
     }
+    if validated != canonical:
+        raise ValueError("offline fixture batch strategy history diagnostics are invalid")
+    return validated
 
 
 def _validated_walk_forward_diagnostics(
@@ -684,6 +817,7 @@ def _validated_walk_forward_diagnostics(
     bar_count: int,
     required_bar_count: int,
     latest_date: str | None,
+    canonical: dict[str, Any],
 ) -> dict[str, Any]:
     keys = {
         "dtoVersion",
@@ -698,6 +832,8 @@ def _validated_walk_forward_diagnostics(
         "lastObservationDate",
         "stateCounts",
         "transitionCount",
+        "foldCount",
+        "folds",
     }
     if not isinstance(value, dict) or set(value) != keys:
         raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
@@ -712,7 +848,7 @@ def _validated_walk_forward_diagnostics(
         else set()
     )
     if (
-        value["dtoVersion"] != "strategy-history-walk-forward.v1"
+        value["dtoVersion"] != "strategy-history-walk-forward.v2"
         or value["providerCalls"] != "blocked"
         or value["accountData"] != "absent"
         or value["executionRoutes"] != "absent"
@@ -775,7 +911,95 @@ def _validated_walk_forward_diagnostics(
         ):
             raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
 
-    return {
+    fold_count = value["foldCount"]
+    folds = value["folds"]
+    if (
+        not isinstance(fold_count, int)
+        or isinstance(fold_count, bool)
+        or fold_count < 0
+        or fold_count > 5
+        or not isinstance(folds, list)
+        or len(folds) != fold_count
+    ):
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    expected_fold_count = min(5, observation_count) if expected_state == "available" else 0
+    if fold_count != expected_fold_count:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
+    aggregate_fold_counts: dict[str, int] = {}
+    within_fold_transitions = 0
+    previous_fold_last: date | None = None
+    if fold_count:
+        base_fold_size, extra_observations = divmod(observation_count, fold_count)
+        for fold_index, fold in enumerate(folds):
+            fold_keys = {
+                "foldIndex",
+                "observationCount",
+                "firstObservationDate",
+                "lastObservationDate",
+                "stateCounts",
+                "transitionCount",
+            }
+            expected_fold_size = base_fold_size + (1 if fold_index < extra_observations else 0)
+            if not isinstance(fold, dict) or set(fold) != fold_keys:
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+            fold_observation_count = fold["observationCount"]
+            fold_transition_count = fold["transitionCount"]
+            fold_state_counts = fold["stateCounts"]
+            if (
+                not isinstance(fold["foldIndex"], int)
+                or isinstance(fold["foldIndex"], bool)
+                or fold["foldIndex"] != fold_index
+                or not isinstance(fold_observation_count, int)
+                or isinstance(fold_observation_count, bool)
+                or fold_observation_count != expected_fold_size
+                or not isinstance(fold_transition_count, int)
+                or isinstance(fold_transition_count, bool)
+                or fold_transition_count < 0
+                or fold_transition_count > fold_observation_count - 1
+                or not isinstance(fold_state_counts, dict)
+                or any(
+                    state not in supported_states
+                    or not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count <= 0
+                    for state, count in fold_state_counts.items()
+                )
+                or sum(fold_state_counts.values()) != fold_observation_count
+                or fold_transition_count < max(0, len(fold_state_counts) - 1)
+            ):
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+            try:
+                fold_first = date.fromisoformat(fold["firstObservationDate"])
+                fold_last = date.fromisoformat(fold["lastObservationDate"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid") from exc
+            if (
+                fold_first.isoformat() != fold["firstObservationDate"]
+                or fold_last.isoformat() != fold["lastObservationDate"]
+                or fold_first > fold_last
+                or (fold_observation_count == 1 and fold_first != fold_last)
+                or (fold_observation_count > 1 and fold_first >= fold_last)
+                or (previous_fold_last is not None and fold_first <= previous_fold_last)
+            ):
+                raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+            previous_fold_last = fold_last
+            _merge_histogram(aggregate_fold_counts, fold_state_counts)
+            within_fold_transitions += fold_transition_count
+
+        if (
+            folds[0]["firstObservationDate"] != first_date
+            or folds[-1]["lastObservationDate"] != last_date
+            or sum(fold["observationCount"] for fold in folds) != observation_count
+            or aggregate_fold_counts != state_counts
+            or transition_count < within_fold_transitions
+            or transition_count > within_fold_transitions + fold_count - 1
+        ):
+            raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    elif folds:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+
+    validated = {
         "dtoVersion": value["dtoVersion"],
         "providerCalls": "blocked",
         "accountData": "absent",
@@ -788,4 +1012,19 @@ def _validated_walk_forward_diagnostics(
         "lastObservationDate": last_date,
         "stateCounts": {state: state_counts[state] for state in sorted(state_counts)},
         "transitionCount": transition_count,
+        "foldCount": fold_count,
+        "folds": [
+            {
+                "foldIndex": fold["foldIndex"],
+                "observationCount": fold["observationCount"],
+                "firstObservationDate": fold["firstObservationDate"],
+                "lastObservationDate": fold["lastObservationDate"],
+                "stateCounts": {state: fold["stateCounts"][state] for state in sorted(fold["stateCounts"])},
+                "transitionCount": fold["transitionCount"],
+            }
+            for fold in folds
+        ],
     }
+    if validated != canonical:
+        raise ValueError("offline fixture batch walk-forward diagnostics are invalid")
+    return validated

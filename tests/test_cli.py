@@ -93,12 +93,53 @@ class CliTests(unittest.TestCase):
         self.assertEqual(diagnostics["candidateIntent"], "skip")
         self.assertEqual(diagnostics["providerCalls"], "blocked")
         self.assertEqual(diagnostics["executionRoutes"], "absent")
-        self.assertEqual(diagnostics["walkForward"]["dtoVersion"], "strategy-history-walk-forward.v1")
+        self.assertEqual(diagnostics["walkForward"]["dtoVersion"], "strategy-history-walk-forward.v2")
         self.assertEqual(diagnostics["walkForward"]["eligibleObservationCount"], 1)
         self.assertEqual(diagnostics["walkForward"]["stateCounts"], {"trend-confirmed": 1})
         self.assertEqual(diagnostics["walkForward"]["transitionCount"], 0)
+        self.assertEqual(diagnostics["walkForward"]["foldCount"], 1)
+        self.assertEqual(diagnostics["walkForward"]["folds"][0]["observationCount"], 1)
         for forbidden in ("accountid", "positionid", "orderid", "apikey", "userkey", "winrate", "sharpe"):
             self.assertNotIn(forbidden, serialized)
+
+    def test_readiness_cli_redacts_available_multi_fold_walk_forward_summary(self):
+        result = self.run_cli(
+            "readiness",
+            "--fixture",
+            f"SPY={SLOW_TREND_FIXTURE_PATH}",
+            "--strategy",
+            "slow-trend-allocation",
+            "--strategy-params-json",
+            '{"shortLookbackDays":10,"longLookbackDays":190,"confirmationBars":2}',
+            "--market",
+            "US_EQUITIES",
+            "--instrument-class",
+            "ETF",
+            "--started-at",
+            "2025-10-13T00:00:00Z",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        walk_forward = payload["fixtureDiagnostics"][0]["strategyHistoryDiagnostics"]["walkForward"]
+        self.assertEqual(walk_forward["dtoVersion"], "strategy-history-walk-forward.v2")
+        self.assertEqual(walk_forward["state"], "available")
+        self.assertEqual(walk_forward["eligibleObservationCount"], 12)
+        self.assertEqual(walk_forward["foldCount"], 5)
+        self.assertEqual([fold["observationCount"] for fold in walk_forward["folds"]], [3, 3, 2, 2, 2])
+        self.assertTrue(
+            all(
+                set(fold) == {"foldIndex", "observationCount", "stateCounts", "transitionCount"}
+                for fold in walk_forward["folds"]
+            )
+        )
+        self.assertNotIn("firstObservationDate", walk_forward)
+        self.assertNotIn("lastObservationDate", walk_forward)
+        self.assertNotIn("metrics", json.dumps(walk_forward))
+        self.assertEqual(walk_forward["providerCalls"], "blocked")
+        self.assertEqual(walk_forward["accountData"], "absent")
+        self.assertEqual(walk_forward["executionRoutes"], "absent")
+        self.assertEqual(walk_forward["candidateIntent"], "skip")
 
     def test_backtest_cli_proves_checksum_pinned_volatility_scenarios(self):
         cases = (
@@ -572,10 +613,12 @@ class CliTests(unittest.TestCase):
             all(
                 fixture["strategyHistoryDiagnostics"]["walkForward"]
                 == {
-                    "dtoVersion": "strategy-history-walk-forward.v1",
+                    "dtoVersion": "strategy-history-walk-forward.v2",
                     "state": "not-applicable",
                     "eligibleObservationCount": 0,
                     "transitionCount": 0,
+                    "foldCount": 0,
+                    "folds": [],
                     "providerCalls": "blocked",
                     "accountData": "absent",
                     "executionRoutes": "absent",

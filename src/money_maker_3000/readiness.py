@@ -268,6 +268,16 @@ def _fixture_readiness_diagnostic(
                     "eligibleObservationCount"
                 ],
                 "transitionCount": report["strategyHistoryDiagnostics"]["walkForward"]["transitionCount"],
+                "foldCount": report["strategyHistoryDiagnostics"]["walkForward"]["foldCount"],
+                "folds": [
+                    {
+                        "foldIndex": fold["foldIndex"],
+                        "observationCount": fold["observationCount"],
+                        "stateCounts": fold["stateCounts"],
+                        "transitionCount": fold["transitionCount"],
+                    }
+                    for fold in report["strategyHistoryDiagnostics"]["walkForward"]["folds"]
+                ],
                 "providerCalls": report["strategyHistoryDiagnostics"]["walkForward"]["providerCalls"],
                 "accountData": report["strategyHistoryDiagnostics"]["walkForward"]["accountData"],
                 "executionRoutes": report["strategyHistoryDiagnostics"]["walkForward"]["executionRoutes"],
