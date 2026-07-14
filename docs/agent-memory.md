@@ -49,6 +49,9 @@ Updated: 2026-07-15
   the validated gap/weekend counters, so even one weekend observation warns
   while retaining the `insufficient-history` state. Warnings do not change
   error-based readiness, and the projection omits observation dates.
+  Shared validation enforces singleton date identity, exact weekday-grid gap
+  arithmetic, and feasible interval/span/maximum-gap combinations before the
+  DTO can drive warnings or enter a batch.
 - Offline historical fixture coverage now includes `SPY`, `GLD`, and `QQQ`
   daily synthetic short fixtures. Historical backtest reports include
   `periodDiagnostics` with `24h`, `1w`, `1m`, `1y`, `5y`, and `max` market

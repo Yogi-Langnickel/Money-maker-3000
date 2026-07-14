@@ -152,6 +152,8 @@ def validated_sampling_quality(value: Any) -> dict[str, object]:
     interval_count = value["intervalCount"]
     first_date = value["firstDate"]
     last_date = value["lastDate"]
+    parsed_first: date | None = None
+    parsed_last: date | None = None
     if observation_count == 0:
         if first_date is not None or last_date is not None or value["calendarSpanDays"] != 0:
             raise ValueError("sampling quality is invalid")
@@ -168,6 +170,38 @@ def validated_sampling_quality(value: Any) -> dict[str, object]:
             or (parsed_last - parsed_first).days != value["calendarSpanDays"]
         ):
             raise ValueError("sampling quality is invalid")
+    if observation_count == 1:
+        expected_weekday_count = int(parsed_first is not None and parsed_first.weekday() < 5)
+        if (
+            first_date != last_date
+            or value["calendarSpanDays"] != 0
+            or value["observedWeekdayCount"] != expected_weekday_count
+            or value["observedWeekendCount"] != 1 - expected_weekday_count
+        ):
+            raise ValueError("sampling quality is invalid")
+    elif observation_count >= 2:
+        if parsed_first is None or parsed_last is None or parsed_first >= parsed_last:
+            raise ValueError("sampling quality is invalid")
+        endpoint_weekday_count = int(parsed_first.weekday() < 5) + int(parsed_last.weekday() < 5)
+        endpoint_weekend_count = 2 - endpoint_weekday_count
+        observed_interior_weekday_count = value["observedWeekdayCount"] - endpoint_weekday_count
+        observed_interior_weekend_count = value["observedWeekendCount"] - endpoint_weekend_count
+        interior_day_count = value["calendarSpanDays"] - 1
+        interior_weekday_count = _weekdays_strictly_between(parsed_first, parsed_last)
+        interior_weekend_count = interior_day_count - interior_weekday_count
+        expected_potential_weekday_count = (
+            interior_weekday_count - observed_interior_weekday_count
+        )
+        if (
+            endpoint_weekday_count > value["observedWeekdayCount"]
+            or endpoint_weekend_count > value["observedWeekendCount"]
+            or observed_interior_weekday_count < 0
+            or not 0 <= observed_interior_weekend_count <= interior_weekend_count
+            or expected_potential_weekday_count < 0
+            or value["potentialMissingWeekdayCount"] != expected_potential_weekday_count
+        ):
+            raise ValueError("sampling quality is invalid")
+
     if interval_count == 0:
         if (
             value["potentialMissingWeekdayCount"] != 0
@@ -175,8 +209,34 @@ def validated_sampling_quality(value: Any) -> dict[str, object]:
             or value["maximumCalendarGapDays"] != 0
         ):
             raise ValueError("sampling quality is invalid")
-    elif not 1 <= value["maximumCalendarGapDays"] <= value["calendarSpanDays"]:
-        raise ValueError("sampling quality is invalid")
+    else:
+        span_days = value["calendarSpanDays"]
+        maximum_gap_days = value["maximumCalendarGapDays"]
+        long_interval_count = value["intervalsOverThreeCalendarDays"]
+        if span_days < interval_count or maximum_gap_days > span_days:
+            raise ValueError("sampling quality is invalid")
+        if long_interval_count == 0:
+            minimum_span = maximum_gap_days + interval_count - 1
+            maximum_span = maximum_gap_days * interval_count
+            if not 1 <= maximum_gap_days <= 3 or not minimum_span <= span_days <= maximum_span:
+                raise ValueError("sampling quality is invalid")
+        else:
+            minimum_span = (
+                maximum_gap_days
+                + 4 * (long_interval_count - 1)
+                + interval_count
+                - long_interval_count
+            )
+            maximum_span = (
+                maximum_gap_days * long_interval_count
+                + 3 * (interval_count - long_interval_count)
+            )
+            if (
+                not 1 <= long_interval_count <= interval_count
+                or maximum_gap_days < 4
+                or not minimum_span <= span_days <= maximum_span
+            ):
+                raise ValueError("sampling quality is invalid")
 
     if observation_count < 2:
         expected_state = "insufficient-history"
