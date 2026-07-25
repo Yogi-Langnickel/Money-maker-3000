@@ -61,13 +61,17 @@ treated as an append blocker.
   consistency, veto, provider-boundary, and parent/nested parity validation.
 - Rejects duplicate JSON keys at every nesting depth and bool/float legacy
   version impersonation as controlled invalid-audit records.
-- Validates strategy and config versions against their canonical registry and
-  simulation-contract owners.
-- Rejects oversized integers as controlled corruption without exposing
-  arithmetic exceptions; the CLI emits its normal redacted corruption DTO and
-  exits nonzero.
+- Validates strategy and config versions against immutable v2-owned historical
+  allowlists, keeping archived supported records readable after current
+  producer versions advance.
+- Rejects oversized finite integers/floats as controlled corruption without
+  exposing arithmetic exceptions; the CLI emits its normal redacted corruption
+  DTO and exits nonzero. Legacy v1 unsafe numeric facts normalize to `null`, and
+  direct/CLI reports serialize with `allow_nan=False`.
 - Uses shared reader/exclusive writer locking with a private already-locked
   scan path, preventing partial-read races without recursive lock acquisition.
+  Ordinary reads require write access to the sidecar and directory permission
+  when creating it; this operational requirement is explicit.
 - Binds generated and validated trade-log IDs to run IDs so multi-run
   diagnostics cannot reuse or detach nested identities.
 - Made direct v2 report construction validate before sanitization, eliminating

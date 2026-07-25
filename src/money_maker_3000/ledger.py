@@ -14,9 +14,8 @@ try:
 except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
     fcntl = None
 
-from money_maker_3000.contracts import SIMULATION_CONTRACT_VERSION, utc_iso
+from money_maker_3000.contracts import utc_iso
 from money_maker_3000.risk import RISK_VETO_CODES
-from money_maker_3000.strategies import STRATEGY_REGISTRY, strategy_by_id
 
 REDACTED = "redacted"
 ABSENT = "absent"
@@ -24,7 +23,15 @@ REPORT_DECISIONS = {"skip"}
 REPORT_RISK_RESULTS = {"blocked"}
 REPORT_RISK_DECISIONS = {"blocked"}
 REPORT_TRADE_LOG_ACTIONS = {"simulated-skip"}
-REPORT_STRATEGY_IDS = {strategy["strategyId"] for strategy in STRATEGY_REGISTRY}
+V2_SUPPORTED_CONFIG_VERSIONS = frozenset({"0.1.0-sim"})
+V2_SUPPORTED_STRATEGY_VERSIONS = {
+    "dca-cash-reserve": frozenset({"0.1.0-sim"}),
+    "threshold-rebalance": frozenset({"0.1.0-sim"}),
+    "volatility-band-accumulator": frozenset({"0.1.0-sim"}),
+    "slow-trend-allocation": frozenset({"0.1.0-sim"}),
+    "news-aware-watchlist": frozenset({"0.1.0-plan"}),
+}
+REPORT_STRATEGY_IDS = frozenset(V2_SUPPORTED_STRATEGY_VERSIONS)
 REPORT_DATA_FRESHNESS = {"fresh", "future-data", "missing", "stale", "unknown"}
 REPORT_VETO_CODES = RISK_VETO_CODES
 REPORT_REASON_CODES = REPORT_RISK_DECISIONS | REPORT_VETO_CODES
@@ -435,12 +442,12 @@ def _validate_simulation_audit_record(record: dict[str, Any]) -> dict[str, Any]:
         _validate_identifier(record[key], key)
     if record["mode"] != "simulation" or record["environment"] != "synthetic":
         raise ValueError("ledger record must be simulation/synthetic only")
-    if record["strategyId"] not in REPORT_STRATEGY_IDS:
+    supported_strategy_versions = V2_SUPPORTED_STRATEGY_VERSIONS.get(record["strategyId"])
+    if supported_strategy_versions is None:
         raise ValueError("ledger record strategy is invalid")
-    strategy = strategy_by_id(record["strategyId"])
-    if strategy is None or record["strategyVersion"] != strategy["version"]:
+    if record["strategyVersion"] not in supported_strategy_versions:
         raise ValueError("ledger record strategy version is invalid")
-    if record["configVersion"] != SIMULATION_CONTRACT_VERSION:
+    if record["configVersion"] not in V2_SUPPORTED_CONFIG_VERSIONS:
         raise ValueError("ledger record config version is invalid")
     if not isinstance(record["configHash"], str) or not SHA256_PATTERN.fullmatch(record["configHash"]):
         raise ValueError("ledger record config hash is invalid")
@@ -481,7 +488,7 @@ def _validate_number(value: Any, field: str, *, positive: bool = False) -> int |
         isinstance(value, bool)
         or not isinstance(value, (int, float))
         or (isinstance(value, float) and not isfinite(value))
-        or (isinstance(value, int) and abs(value) > MAX_SAFE_JSON_INTEGER)
+        or abs(value) > MAX_SAFE_JSON_INTEGER
         or value < 0
         or (positive and value <= 0)
     ):
@@ -635,9 +642,18 @@ def _increment(histogram: dict[str, int], values: Iterable[str]) -> None:
 
 def _report_scalar(value: Any, default: Any = None) -> Any:
     redacted = _redact_value(value)
-    if isinstance(redacted, (dict, list)):
+    if redacted is None:
         return default
-    return redacted if redacted is not None else default
+    if isinstance(redacted, str):
+        return redacted
+    if isinstance(redacted, bool) or not isinstance(redacted, (int, float)):
+        return default
+    if (
+        (isinstance(redacted, float) and not isfinite(redacted))
+        or abs(redacted) > MAX_SAFE_JSON_INTEGER
+    ):
+        return default
+    return redacted
 
 
 def _report_list(value: Any) -> list[Any]:
@@ -663,7 +679,15 @@ def _allowed_report_list(value: Any, allowed: set[str]) -> list[str]:
 
 
 def _report_number(value: Any) -> int | float | None:
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or (isinstance(value, float) and not isfinite(value))
+        or abs(value) > MAX_SAFE_JSON_INTEGER
+        or value < 0
+    ):
+        return None
+    return value
 
 
 def _sanitize_report_record(record: dict[str, Any]) -> dict[str, Any]:

@@ -98,14 +98,17 @@ Reporting reads the source in bounded binary lines and does not repair or
 rewrite it. `simulation-audit-record.v2` is an exact, frozen,
 diagnostic-only schema for synthetic `skip`/`blocked` outcomes. Validation
 requires the complete top-level, allocation, and nested trade-log shapes,
-canonical UTC timestamps, canonical SHA-256 config hashes, registered strategy
-and simulation-contract versions, nonempty safe identities, finite bounded and
-internally consistent allocation values, unique allowlisted vetoes, and
-agreement between parent and nested facts. Duplicate JSON keys at any nesting
-depth are invalid. Trade-log IDs are deterministically derived from run IDs,
-making them unique across generated multi-run diagnostics and preventing
-detached nested identities. Missing, unknown, malformed, mixed-version, and
-future records are rejected rather than supplied with defaults.
+canonical UTC timestamps, canonical SHA-256 config hashes, v2-owned immutable
+supported strategy/config version allowlists, nonempty safe identities, finite
+bounded and internally consistent allocation values, unique allowlisted
+vetoes, and agreement between parent and nested facts. The historical v2
+version allowlists are deliberately not derived from the mutable current
+producer registry or contract version, so producer upgrades do not invalidate
+supported stored records. Duplicate JSON keys at any nesting depth are invalid.
+Trade-log IDs are deterministically derived from run IDs, making them unique
+across generated multi-run diagnostics and preventing detached nested
+identities. Missing, unknown, malformed, mixed-version, and future records are
+rejected rather than supplied with defaults.
 
 Explicit v1 records are normalized and redacted for read/report compatibility
 only. They cannot be appended to. Before an append, the writer verifies that
@@ -121,7 +124,14 @@ Public readers acquire a shared lock on the same stable sidecar used by the
 exclusive append writer. The append path calls a private already-locked reader
 while holding its exclusive lock, avoiding recursive lock acquisition. Reports
 therefore wait for an in-progress append and cannot scan a partially written
-line.
+line. The shared-lock path opens the sidecar writable and creates it if absent:
+ordinary reads require sidecar write access and directory write permission for
+first-use creation. No safe unlocked/read-only archive reader is implemented.
+
+Legacy v1 reporting sanitizes nonfinite, negative financial, boolean numeric,
+and out-of-safe-JSON-range numeric facts to `null` before serialization. This
+preserves controlled JSON output with `allow_nan=False`; it does not reinterpret
+those invalid legacy facts.
 
 The risk module owns the canonical veto-code catalog used by both risk output
 and v2 ledger validation, including `invalid-risk-state` and

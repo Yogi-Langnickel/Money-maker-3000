@@ -9,6 +9,7 @@ from pathlib import Path
 import queue
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from money_maker_3000.backtest import build_synthetic_backtest
 from money_maker_3000.contracts import DEFAULT_SIMULATION_CONFIG
@@ -29,7 +30,7 @@ from money_maker_3000.risk import (
     VALIDATION_VETO_CODES,
     evaluate_risk_gate,
 )
-from money_maker_3000.strategies import strategy_by_id
+from money_maker_3000.strategies import STRATEGY_REGISTRY, strategy_by_id
 
 
 def valid_record() -> dict:
@@ -229,6 +230,27 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
         self.assertIsNotNone(strategy)
         self.assertEqual(valid_record()["strategyVersion"], strategy["version"])
 
+    def test_historical_v2_versions_survive_current_producer_version_advance(self):
+        record = valid_record()
+        advanced_registry = [
+            {
+                **strategy,
+                "version": "9.9.9-sim",
+            }
+            for strategy in STRATEGY_REGISTRY
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "historical-v2.jsonl"
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            with (
+                patch("money_maker_3000.strategies.STRATEGY_REGISTRY", advanced_registry),
+                patch("money_maker_3000.contracts.SIMULATION_CONTRACT_VERSION", "9.9.9-sim"),
+            ):
+                recovered = read_ledger_records_with_integrity(path)
+
+        self.assertEqual(recovered["integrity"]["state"], "clean")
+        self.assertEqual(recovered["records"], [record])
+
     def test_invalid_numeric_scalars_booleans_and_nonfinite_values_are_rejected(self):
         for field in ("botAllocationUsd", "reservedUsd", "availableUsd", "maxOrderUsd"):
             for value in (True, -1, nan, inf):
@@ -242,17 +264,26 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
                 record["tradeLogEntry"]["budgetRemainingUsd"] = value
                 self.assert_invalid_append(record)
 
-    def test_huge_integers_are_controlled_corruption_not_overflow(self):
-        record = valid_record()
-        record["allocation"]["botAllocationUsd"] = 10**1000
+    def test_huge_numbers_are_controlled_corruption_not_overflow(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "huge-number.jsonl"
-            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            path = Path(temp_dir) / "huge-numbers.jsonl"
+            records = []
+            for value in (10**1000, 1e308):
+                record = valid_record()
+                record["allocation"]["botAllocationUsd"] = value
+                records.append(record)
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
             recovered = read_ledger_records_with_integrity(path)
 
         self.assertEqual(recovered["records"], [])
         self.assertEqual(recovered["integrity"]["state"], "corrupted")
-        self.assertEqual(recovered["integrity"]["issues"][0]["code"], "invalid-audit-record")
+        self.assertEqual(recovered["integrity"]["errorCount"], 2)
+        self.assertTrue(
+            all(issue["code"] == "invalid-audit-record" for issue in recovered["integrity"]["issues"])
+        )
 
     def test_frozen_diagnostic_and_provider_boundary_values_are_enforced(self):
         mutations = (
@@ -394,6 +425,33 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "fields do not match"):
             build_ledger_report(records=[record])
+
+    def test_legacy_report_sanitizes_nonfinite_and_out_of_range_scalars(self):
+        legacy = {
+            "ledgerVersion": 1,
+            "recordedAt": float("inf"),
+            "correlationId": float("nan"),
+            "runId": 10**1000,
+            "allocationId": b"not-json-safe",
+            "strategyId": "dca-cash-reserve",
+            "decision": "skip",
+            "riskResult": "blocked",
+            "tradeLogEntry": {
+                "action": "simulated-skip",
+                "reasonCode": "blocked",
+                "budgetRemainingUsd": float("nan"),
+            },
+        }
+
+        report = build_ledger_report(records=[legacy])
+        serialized = json.dumps(report, allow_nan=False)
+
+        self.assertIsInstance(serialized, str)
+        self.assertIsNone(report["records"][0]["recordedAt"])
+        self.assertIsNone(report["records"][0]["correlationId"])
+        self.assertIsNone(report["records"][0]["runId"])
+        self.assertIsNone(report["records"][0]["allocationId"])
+        self.assertIsNone(report["records"][0]["tradeLog"]["budgetRemainingUsd"])
 
     def test_record_builder_does_not_default_missing_current_facts(self):
         record = valid_record()
