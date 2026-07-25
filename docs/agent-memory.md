@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-07-15
+Updated: 2026-07-25
 
 ## Current Truth
 
@@ -160,6 +160,17 @@ Updated: 2026-07-15
   writer lock so duplicate identity checks and JSONL writes are one critical
   section. It rejects sensitive key names and generic scalar values that look
   like emails, provider/account/order IDs, or token-like secrets.
+- `simulation-audit-record.v2` is frozen as an exact diagnostic-only
+  `skip`/`blocked` schema. Top-level, allocation, and nested trade-log fields
+  are all required; timestamps, SHA-256 config hashes, identities, finite
+  allocation values, unique canonical risk vetoes, and parent/nested parity
+  fail closed. Malformed v2 is never defaulted. Explicit v1 is
+  read/report/redact-only, and append refuses a corrupt, legacy, or mixed
+  existing ledger without mutation.
+- Risk veto codes are canonically shared from `risk.py`; the catalog includes
+  `invalid-risk-state` and `invalid-order-intent`. Actual virtual orders,
+  fills, cash, and positions require a future v3/SQLite event model rather than
+  widening v2.
 - Ledger reporting recovers valid records from malformed JSONL without
   modifying the source. Integrity metadata is structurally validated and
   contains only allowlisted issue codes/counts with raw content absent.

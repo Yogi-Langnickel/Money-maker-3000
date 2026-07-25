@@ -95,12 +95,30 @@ or concurrent simulation worker attempts idempotent without introducing live
 provider state, account identifiers, or an external storage dependency.
 
 Reporting reads the source in bounded binary lines and does not repair or
-rewrite it. Valid v2 records are strictly validated; legacy records are
-normalized and redacted with warnings. Oversized lines, invalid UTF-8/JSON,
-non-object values, and invalid v2 records are rejected. The report contains
-only allowlisted issue codes, line numbers, severities, and counts—never raw
-malformed content. Any rejected record marks integrity `corrupted` and makes
-the CLI exit non-zero after emitting the controlled report.
+rewrite it. `simulation-audit-record.v2` is an exact, frozen,
+diagnostic-only schema for synthetic `skip`/`blocked` outcomes. Validation
+requires the complete top-level, allocation, and nested trade-log shapes,
+canonical UTC timestamps, canonical SHA-256 config hashes, nonempty safe
+identities, finite internally consistent allocation values, unique allowlisted
+vetoes, and agreement between parent and nested facts. Missing, unknown,
+malformed, mixed-version, and future records are rejected rather than supplied
+with defaults.
+
+Explicit v1 records are normalized and redacted for read/report compatibility
+only. They cannot be appended to. Before an append, the writer verifies that
+every existing nonempty source line is a clean v2 record; corruption, legacy
+content, or mixed versions fail closed without changing the source. Oversized
+lines, invalid UTF-8/JSON, non-object values, and invalid v2 records are
+rejected. The report contains only allowlisted issue codes, line numbers,
+severities, and counts—never raw malformed content. Any rejected record marks
+integrity `corrupted` and makes the CLI exit non-zero after emitting the
+controlled report.
+
+The risk module owns the canonical veto-code catalog used by both risk output
+and v2 ledger validation, including `invalid-risk-state` and
+`invalid-order-intent`. Future actual virtual-trade accounting must use a new
+v3/SQLite event model for orders, fills, cash, positions, and migrations. It
+must not widen or reinterpret diagnostic v2 records.
 
 ## Simulation Worker Lease Boundary
 

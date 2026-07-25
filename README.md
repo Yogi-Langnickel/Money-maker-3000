@@ -127,6 +127,20 @@ the source file. It emits allowlisted integrity issue codes and counts only;
 raw malformed content is never copied into the report. A corrupted ledger
 returns exit status `1`, while a clean or warning-only recovery returns `0`.
 
+`simulation-audit-record.v2` is frozen as an exact-shape diagnostic record. It
+can represent only synthetic `skip`/`blocked` outcomes; it is not a virtual
+order or fill record. Every top-level, allocation, and trade-log field is
+required and validated, including canonical UTC timestamps, SHA-256 config
+hashes, identities, finite allocation values, allowlisted unique vetoes, and
+matching parent/trade-log facts. Missing, unknown, mixed-version, and future
+records are rejected instead of being completed with defaults.
+
+Explicit `simulation-audit-record.v1` records remain read/report/redact-only.
+They cannot be appended to, and an existing corrupt, legacy, or mixed ledger
+blocks further appends without changing the source. Actual virtual orders,
+fills, cash, and positions belong to a separately reviewed v3/SQLite event
+model; v2 will not be widened for that capability.
+
 Simulation worker lease report:
 
 ```sh

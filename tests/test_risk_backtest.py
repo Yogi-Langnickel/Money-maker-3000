@@ -1008,12 +1008,25 @@ class RiskAndBacktestTests(unittest.TestCase):
         report = build_synthetic_backtest(include_ledger_records=True)
         record = report["ledgerRecords"][0]
         unsafe = build_ledger_record(
-            run={**record, "tradeLogEntry": {"accountId": "acct-real-123", "apiKey": "secret"}},
+            run={
+                **record,
+                "evaluatedAt": record["recordedAt"],
+                "riskDecision": {"decision": record["riskDecision"]},
+                "allocation": {
+                    **record["allocation"],
+                    "allocationId": record["allocationId"],
+                    "strategyAllocationId": record["strategyAllocationId"],
+                },
+                "tradeLogEntry": {
+                    **record["tradeLogEntry"],
+                    "accountIdentifiers": "acct-real-123",
+                },
+            },
         )
 
         self.assertEqual(record["tradeLogEntry"]["correlationId"], record["correlationId"])
         self.assertEqual(record["allocation"]["providerDemoBalance"], "redacted")
-        self.assertEqual(unsafe["tradeLogEntry"]["accountId"], "redacted")
+        self.assertEqual(unsafe["tradeLogEntry"]["accountIdentifiers"], "redacted")
         self.assertEqual(unsafe["providerCallStatus"], "not-attempted")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1039,16 +1052,26 @@ class RiskAndBacktestTests(unittest.TestCase):
             ledger_path = Path(temp_dir) / "ledger.jsonl"
             append_ledger_record(ledger_path, record)
 
-            with self.assertRaisesRegex(ValueError, "runId"):
-                append_ledger_record(ledger_path, {**record, "correlationId": "corr-other"})
-            with self.assertRaisesRegex(ValueError, "correlationId"):
+            with self.assertRaisesRegex(ValueError, "run identity"):
+                append_ledger_record(
+                    ledger_path,
+                    {
+                        **record,
+                        "correlationId": "corr-other",
+                        "tradeLogEntry": {
+                            **record["tradeLogEntry"],
+                            "correlationId": "corr-other",
+                        },
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "correlation identity"):
                 append_ledger_record(ledger_path, {**record, "runId": "run-other"})
-            with self.assertRaisesRegex(ValueError, "unsupported fields"):
+            with self.assertRaisesRegex(ValueError, "fields do not match"):
                 append_ledger_record(
                     ledger_path,
                     {**record, "runId": "run-third", "correlationId": "corr-third", "accountId": "acct-real-123"},
                 )
-            with self.assertRaisesRegex(ValueError, "unredacted sensitive data"):
+            with self.assertRaisesRegex(ValueError, "trade log is invalid"):
                 append_ledger_record(
                     ledger_path,
                     {
@@ -1064,18 +1087,25 @@ class RiskAndBacktestTests(unittest.TestCase):
                     {
                         **record,
                         "runId": "run-fifth",
-                        "correlationId": "corr-fifth",
-                        "tradeLogEntry": {"note": "manual check for acct-real-123"},
+                        "correlationId": "acct-real-123",
+                        "tradeLogEntry": {
+                            **record["tradeLogEntry"],
+                            "correlationId": "acct-real-123",
+                        },
                     },
                 )
-            with self.assertRaisesRegex(ValueError, "unredacted sensitive data"):
+            with self.assertRaisesRegex(ValueError, "is invalid"):
                 append_ledger_record(
                     ledger_path,
                     {
                         **record,
                         "runId": "run-sixth",
                         "correlationId": "corr-sixth",
-                        "tradeLogEntry": {"memo": "operator@example.test"},
+                        "tradeLogEntry": {
+                            **record["tradeLogEntry"],
+                            "tradeLogId": "operator@example.test",
+                            "correlationId": "corr-sixth",
+                        },
                     },
                 )
 

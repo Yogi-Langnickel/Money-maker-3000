@@ -47,6 +47,34 @@ VALIDATION_VETO_CODES = {
     "simulationConfig": "invalid-simulation-config",
 }
 
+RISK_VETO_CODES = frozenset(
+    {
+        *VALIDATION_VETO_CODES.values(),
+        "allocation-drawdown-stop",
+        "blocked-instrument-class",
+        "cash-reserve-floor",
+        "daily-loss-stop",
+        "data-future-data",
+        "data-missing",
+        "data-stale",
+        "data-unknown",
+        "execution-route-absent",
+        "insufficient-available-allocation",
+        "invalid-order-intent",
+        "invalid-risk-state",
+        "invalid-strategy-version",
+        "max-open-positions",
+        "missing-loss-reconciliation",
+        "missing-order-intent",
+        "missing-reconciliation",
+        "per-instrument-exposure-cap",
+        "per-order-cap",
+        "provider-not-connected",
+        "unknown-provider-state",
+        "weekly-loss-stop",
+    }
+)
+
 
 @dataclass(frozen=True)
 class RiskInputState:

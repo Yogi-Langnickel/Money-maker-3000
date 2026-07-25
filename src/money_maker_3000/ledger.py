@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+from math import isfinite
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -14,6 +15,7 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
     fcntl = None
 
 from money_maker_3000.contracts import utc_iso
+from money_maker_3000.risk import RISK_VETO_CODES
 from money_maker_3000.strategies import STRATEGY_REGISTRY
 
 REDACTED = "redacted"
@@ -24,34 +26,7 @@ REPORT_RISK_DECISIONS = {"blocked"}
 REPORT_TRADE_LOG_ACTIONS = {"simulated-skip"}
 REPORT_STRATEGY_IDS = {strategy["strategyId"] for strategy in STRATEGY_REGISTRY}
 REPORT_DATA_FRESHNESS = {"fresh", "future-data", "missing", "stale", "unknown"}
-REPORT_VETO_CODES = {
-    "allocation-drawdown-stop",
-    "blocked-instrument-class",
-    "cash-reserve-floor",
-    "daily-loss-stop",
-    "data-future-data",
-    "data-missing",
-    "data-stale",
-    "data-unknown",
-    "execution-route-absent",
-    "insufficient-available-allocation",
-    "invalid-allocation-policy",
-    "invalid-budget-policy",
-    "invalid-risk-policy",
-    "invalid-schedule-policy",
-    "invalid-simulation-config",
-    "invalid-strategy-registry",
-    "invalid-strategy-version",
-    "max-open-positions",
-    "missing-loss-reconciliation",
-    "missing-order-intent",
-    "missing-reconciliation",
-    "per-instrument-exposure-cap",
-    "per-order-cap",
-    "provider-not-connected",
-    "unknown-provider-state",
-    "weekly-loss-stop",
-}
+REPORT_VETO_CODES = RISK_VETO_CODES
 REPORT_REASON_CODES = REPORT_RISK_DECISIONS | REPORT_VETO_CODES
 MAX_LEDGER_LINE_BYTES = 64 * 1024
 LEDGER_INTEGRITY_STATES = {"clean", "recovered-with-warnings", "corrupted"}
@@ -111,6 +86,41 @@ SIMULATION_AUDIT_RECORD_KEYS = frozenset(
         "tradeLogEntry",
     }
 )
+SIMULATION_AUDIT_ALLOCATION_KEYS = frozenset(
+    {
+        "botAllocationUsd",
+        "reservedUsd",
+        "availableUsd",
+        "maxOrderUsd",
+        "providerDemoBalance",
+        "providerBalanceUse",
+    }
+)
+SIMULATION_AUDIT_TRADE_LOG_KEYS = frozenset(
+    {
+        "tradeLogId",
+        "correlationId",
+        "action",
+        "strategyId",
+        "strategyVersion",
+        "configHash",
+        "allocationId",
+        "strategyAllocationId",
+        "decision",
+        "riskDecision",
+        "reasonCode",
+        "vetoes",
+        "budgetRemainingUsd",
+        "dataFreshness",
+        "accountIdentifiers",
+        "rawProviderPayloads",
+        "providerCall",
+        "executionRoute",
+    }
+)
+CANONICAL_UTC_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 
 
 def _redact_value(value: Any) -> Any:
@@ -154,13 +164,22 @@ def build_ledger_record(
 ) -> dict[str, Any]:
     if not run:
         raise TypeError("simulation run is required")
-    trade_log_entry = redact_trade_log_entry(entry or run.get("tradeLogEntry"))
-    raw_risk_decision = run.get("riskDecision", {})
-    risk_decision = raw_risk_decision if isinstance(raw_risk_decision, dict) else {"decision": raw_risk_decision}
-    return {
+    allocation = run.get("allocation")
+    raw_trade_log_entry = entry if entry is not None else run.get("tradeLogEntry")
+    raw_risk_decision = run.get("riskDecision")
+    if not isinstance(allocation, dict):
+        raise ValueError("simulation run allocation is invalid")
+    if not isinstance(raw_trade_log_entry, dict):
+        raise ValueError("simulation run trade log is invalid")
+    if not isinstance(raw_risk_decision, dict) or "decision" not in raw_risk_decision:
+        raise ValueError("simulation run risk decision is invalid")
+    if recorded_at is None and "evaluatedAt" not in run:
+        raise ValueError("simulation run evaluated time is missing")
+    trade_log_entry = redact_trade_log_entry(raw_trade_log_entry)
+    record = {
         "ledgerVersion": 2,
         "dtoVersion": "simulation-audit-record.v2",
-        "recordedAt": utc_iso(recorded_at) if recorded_at else run.get("evaluatedAt", utc_iso()),
+        "recordedAt": utc_iso(recorded_at) if recorded_at else run["evaluatedAt"],
         "correlationId": run.get("correlationId"),
         "runId": run.get("runId"),
         "mode": "simulation",
@@ -169,25 +188,26 @@ def build_ledger_record(
         "strategyVersion": run.get("strategyVersion"),
         "configVersion": run.get("configVersion"),
         "configHash": run.get("configHash"),
-        "allocationId": run.get("allocation", {}).get("allocationId"),
-        "strategyAllocationId": run.get("allocation", {}).get("strategyAllocationId"),
+        "allocationId": allocation.get("allocationId"),
+        "strategyAllocationId": allocation.get("strategyAllocationId"),
         "allocation": {
-            "botAllocationUsd": run.get("allocation", {}).get("botAllocationUsd"),
-            "reservedUsd": run.get("allocation", {}).get("reservedUsd"),
-            "availableUsd": run.get("allocation", {}).get("availableUsd"),
-            "maxOrderUsd": run.get("allocation", {}).get("maxOrderUsd"),
+            "botAllocationUsd": allocation.get("botAllocationUsd"),
+            "reservedUsd": allocation.get("reservedUsd"),
+            "availableUsd": allocation.get("availableUsd"),
+            "maxOrderUsd": allocation.get("maxOrderUsd"),
             "providerDemoBalance": REDACTED,
             "providerBalanceUse": "ignored-for-budget",
         },
         "decision": run.get("decision"),
         "riskResult": run.get("riskResult"),
-        "riskDecision": risk_decision.get("decision", "blocked"),
+        "riskDecision": raw_risk_decision["decision"],
         "vetoes": list(run.get("vetoes", [])),
-        "dataFreshness": run.get("tradeLogEntry", {}).get("dataFreshness", "unknown"),
+        "dataFreshness": raw_trade_log_entry.get("dataFreshness"),
         "providerCallStatus": "not-attempted",
         "executionRoute": ABSENT,
         "tradeLogEntry": trade_log_entry,
     }
+    return _validate_simulation_audit_record(record)
 
 
 def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dict[str, Any]:
@@ -198,7 +218,10 @@ def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dic
     path.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_ledger_writer(path):
         if path.exists():
-            _reject_duplicate_ledger_identity(path, validated_record)
+            recovered = read_ledger_records_with_integrity(path)
+            if recovered["integrity"]["state"] != "clean":
+                raise ValueError("existing ledger is not a clean v2 ledger; append refused")
+            _reject_duplicate_ledger_identity(recovered["records"], validated_record)
         with path.open("a", encoding="utf-8") as output:
             output.write(json.dumps(validated_record, sort_keys=True, separators=(",", ":")) + "\n")
             output.flush()
@@ -207,9 +230,10 @@ def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dic
 
 
 def read_ledger_records(ledger_path: str | Path) -> list[dict[str, Any]]:
-    path = Path(ledger_path)
-    with path.open("r", encoding="utf-8") as source:
-        return [json.loads(line) for line in source if line.strip()]
+    recovered = read_ledger_records_with_integrity(ledger_path)
+    if recovered["integrity"]["state"] == "corrupted":
+        raise ValueError("ledger is corrupted; raw records are unavailable")
+    return recovered["records"]
 
 
 def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any]:
@@ -249,17 +273,20 @@ def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any
                 issues.append(_ledger_integrity_issue(line_number, "invalid-record-shape", "error"))
                 continue
 
-            if parsed.get("dtoVersion") == "simulation-audit-record.v2":
+            if _is_v2_record_candidate(parsed):
                 try:
                     parsed = _validate_simulation_audit_record(parsed)
                 except (TypeError, ValueError):
                     issues.append(_ledger_integrity_issue(line_number, "invalid-audit-record", "error"))
                     continue
-            else:
+            elif _is_explicit_legacy_v1_record(parsed):
                 issues.append(_ledger_integrity_issue(line_number, "legacy-record-normalized", "warning"))
                 if _has_unredacted_sensitive_value(parsed):
                     issues.append(_ledger_integrity_issue(line_number, "sensitive-record-redacted", "warning"))
                 parsed = redact_mapping(parsed)
+            else:
+                issues.append(_ledger_integrity_issue(line_number, "invalid-audit-record", "error"))
+                continue
             records.append(parsed)
 
     error_count = len([issue for issue in issues if issue["severity"] == "error"])
@@ -368,16 +395,139 @@ def _validated_ledger_integrity(integrity: dict[str, Any] | None, record_count: 
 def _validate_simulation_audit_record(record: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise TypeError("ledger record must be a JSON object")
-    unknown_keys = sorted(set(record) - SIMULATION_AUDIT_RECORD_KEYS)
-    if unknown_keys:
-        raise ValueError(f"ledger record has unsupported fields: {', '.join(unknown_keys)}")
-    if record.get("dtoVersion") != "simulation-audit-record.v2":
-        raise ValueError("ledger record must use simulation-audit-record.v2")
-    if record.get("mode") != "simulation" or record.get("environment") != "synthetic":
+    if set(record) != SIMULATION_AUDIT_RECORD_KEYS:
+        raise ValueError("ledger record fields do not match simulation-audit-record.v2")
+    if type(record["ledgerVersion"]) is not int or record["ledgerVersion"] != 2:
+        raise ValueError("ledger record version is invalid")
+    if record["dtoVersion"] != "simulation-audit-record.v2":
+        raise ValueError("ledger record DTO version is invalid")
+    _validate_canonical_utc(record["recordedAt"])
+    for key in (
+        "correlationId",
+        "runId",
+        "strategyVersion",
+        "configVersion",
+        "allocationId",
+        "strategyAllocationId",
+    ):
+        _validate_identifier(record[key], key)
+    if record["mode"] != "simulation" or record["environment"] != "synthetic":
         raise ValueError("ledger record must be simulation/synthetic only")
+    if record["strategyId"] not in REPORT_STRATEGY_IDS:
+        raise ValueError("ledger record strategy is invalid")
+    if not isinstance(record["configHash"], str) or not SHA256_PATTERN.fullmatch(record["configHash"]):
+        raise ValueError("ledger record config hash is invalid")
+    if record["decision"] != "skip":
+        raise ValueError("ledger record decision is invalid")
+    if record["riskResult"] != "blocked" or record["riskDecision"] != "blocked":
+        raise ValueError("ledger record risk result is invalid")
+    vetoes = _validate_vetoes(record["vetoes"])
+    if record["dataFreshness"] not in REPORT_DATA_FRESHNESS:
+        raise ValueError("ledger record data freshness is invalid")
+    if record["providerCallStatus"] != "not-attempted" or record["executionRoute"] != ABSENT:
+        raise ValueError("ledger record provider boundary is invalid")
+    _validate_allocation(record["allocation"])
+    _validate_trade_log(record["tradeLogEntry"], record, vetoes)
     if _has_unredacted_sensitive_value(record):
         raise ValueError("ledger record contains unredacted sensitive data")
     return dict(record)
+
+
+def _validate_identifier(value: Any, field: str) -> None:
+    if not isinstance(value, str) or not IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError(f"ledger record {field} is invalid")
+
+
+def _validate_canonical_utc(value: Any) -> None:
+    if not isinstance(value, str) or not CANONICAL_UTC_PATTERN.fullmatch(value):
+        raise ValueError("ledger record timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("ledger record timestamp is invalid") from error
+    if parsed.tzinfo != timezone.utc or utc_iso(parsed) != value:
+        raise ValueError("ledger record timestamp is invalid")
+
+
+def _validate_number(value: Any, field: str, *, positive: bool = False) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        or value < 0
+        or (positive and value <= 0)
+    ):
+        raise ValueError(f"ledger record {field} is invalid")
+    return float(value)
+
+
+def _validate_vetoes(value: Any) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or item not in RISK_VETO_CODES for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise ValueError("ledger record vetoes are invalid")
+    return list(value)
+
+
+def _validate_allocation(value: Any) -> None:
+    if not isinstance(value, dict) or set(value) != SIMULATION_AUDIT_ALLOCATION_KEYS:
+        raise ValueError("ledger record allocation is invalid")
+    bot = _validate_number(value["botAllocationUsd"], "allocation", positive=True)
+    reserved = _validate_number(value["reservedUsd"], "allocation")
+    available = _validate_number(value["availableUsd"], "allocation")
+    max_order = _validate_number(value["maxOrderUsd"], "allocation", positive=True)
+    if (
+        abs((bot - reserved) - available) > 1e-9
+        or reserved > bot
+        or max_order > available
+        or value["providerDemoBalance"] != REDACTED
+        or value["providerBalanceUse"] != "ignored-for-budget"
+    ):
+        raise ValueError("ledger record allocation is invalid")
+
+
+def _validate_trade_log(value: Any, parent: dict[str, Any], vetoes: list[str]) -> None:
+    if not isinstance(value, dict) or set(value) != SIMULATION_AUDIT_TRADE_LOG_KEYS:
+        raise ValueError("ledger record trade log is invalid")
+    _validate_identifier(value["tradeLogId"], "trade log ID")
+    matching_fields = (
+        "correlationId",
+        "strategyId",
+        "strategyVersion",
+        "configHash",
+        "allocationId",
+        "strategyAllocationId",
+        "riskDecision",
+        "dataFreshness",
+    )
+    if any(value[field] != parent[field] for field in matching_fields):
+        raise ValueError("ledger record trade log does not match its parent")
+    nested_vetoes = _validate_vetoes(value["vetoes"])
+    if nested_vetoes != vetoes:
+        raise ValueError("ledger record trade log vetoes do not match its parent")
+    if (
+        value["action"] != "simulated-skip"
+        or value["decision"] != "blocked"
+        or value["reasonCode"] not in REPORT_REASON_CODES
+        or (value["reasonCode"] != "blocked" and value["reasonCode"] not in vetoes)
+        or value["accountIdentifiers"] != REDACTED
+        or value["rawProviderPayloads"] != ABSENT
+        or value["providerCall"] != "not-attempted"
+        or value["executionRoute"] != ABSENT
+    ):
+        raise ValueError("ledger record trade log is invalid")
+    _validate_number(value["budgetRemainingUsd"], "trade log budget")
+
+
+def _is_v2_record_candidate(record: dict[str, Any]) -> bool:
+    return record.get("ledgerVersion") == 2 or record.get("dtoVersion") == "simulation-audit-record.v2"
+
+
+def _is_explicit_legacy_v1_record(record: dict[str, Any]) -> bool:
+    return record.get("ledgerVersion") == 1 and record.get("dtoVersion") in (None, "simulation-audit-record.v1")
 
 
 def _has_unredacted_sensitive_value(value: Any) -> bool:
@@ -400,14 +550,14 @@ def _looks_sensitive_scalar(value: Any) -> bool:
     return any(pattern.search(value) for pattern in SENSITIVE_VALUE_PATTERNS)
 
 
-def _reject_duplicate_ledger_identity(path: Path, record: dict[str, Any]) -> None:
+def _reject_duplicate_ledger_identity(records: list[dict[str, Any]], record: dict[str, Any]) -> None:
     run_id = record.get("runId")
     correlation_id = record.get("correlationId")
-    for existing in read_ledger_records(path):
+    for existing in records:
         if run_id and existing.get("runId") == run_id:
-            raise ValueError(f"ledger already contains runId: {run_id}")
+            raise ValueError("ledger already contains the run identity")
         if correlation_id and existing.get("correlationId") == correlation_id:
-            raise ValueError(f"ledger already contains correlationId: {correlation_id}")
+            raise ValueError("ledger already contains the correlation identity")
 
 
 def _ledger_lock_path(path: Path) -> Path:
@@ -492,6 +642,10 @@ def _sanitize_report_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _record_dto(record: dict[str, Any]) -> dict[str, Any]:
+    if _is_v2_record_candidate(record):
+        record = _validate_simulation_audit_record(record)
+    elif not _is_explicit_legacy_v1_record(record):
+        raise ValueError("ledger report record version is unsupported")
     sanitized = _sanitize_report_record(record)
     trade_log = sanitized["tradeLogEntry"]
     return {
