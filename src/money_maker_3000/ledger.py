@@ -226,6 +226,15 @@ def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dic
     if not ledger_path:
         raise TypeError("ledger path is required")
     validated_record = _validate_simulation_audit_record(record)
+    serialized_record = (
+        json.dumps(
+            validated_record,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    )
     path = Path(ledger_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_ledger_writer(path):
@@ -235,7 +244,7 @@ def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dic
                 raise ValueError("existing ledger is not a clean v2 ledger; append refused")
             _reject_duplicate_ledger_identity(recovered["records"], validated_record)
         with path.open("a", encoding="utf-8") as output:
-            output.write(json.dumps(validated_record, sort_keys=True, separators=(",", ":")) + "\n")
+            output.write(serialized_record)
             output.flush()
             os.fsync(output.fileno())
     return validated_record

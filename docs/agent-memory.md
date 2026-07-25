@@ -173,6 +173,9 @@ Updated: 2026-07-25
   nonfinite values, and integers/floats outside the safe JSON range without
   leaking parser/overflow exceptions. Legacy v1 reporting normalizes unsafe
   numeric facts to `null` so controlled output remains strict JSON.
+- CLI output and JSONL append serialization independently use
+  `allow_nan=False`; unexpected non-standard numeric output fails closed even
+  if upstream validation or legacy normalization regresses.
 - Public ledger reads use a shared sidecar lock; append uses the exclusive lock
   plus an already-locked private reader. Generated trade-log IDs are derived
   from run IDs and validated for parent parity, including multi-run batches.

@@ -67,7 +67,9 @@ treated as an append blocker.
 - Rejects oversized finite integers/floats as controlled corruption without
   exposing arithmetic exceptions; the CLI emits its normal redacted corruption
   DTO and exits nonzero. Legacy v1 unsafe numeric facts normalize to `null`, and
-  direct/CLI reports serialize with `allow_nan=False`.
+  direct/CLI reports serialize with `allow_nan=False`. JSONL append and final
+  CLI serialization also independently set `allow_nan=False` as last-line
+  guards against future upstream regressions.
 - Uses shared reader/exclusive writer locking with a private already-locked
   scan path, preventing partial-read races without recursive lock acquisition.
   Ordinary reads require write access to the sidecar and directory permission

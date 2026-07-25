@@ -144,6 +144,10 @@ blocks further appends without changing the source. Actual virtual orders,
 fills, cash, and positions belong to a separately reviewed v3/SQLite event
 model; v2 will not be widened for that capability.
 
+Both ledger persistence and CLI output serialize with `allow_nan=False`.
+Unexpected non-standard numeric output therefore fails closed even if an
+upstream validation or sanitization regression occurs.
+
 Readers take a shared sidecar lock while scanning. Appends take the exclusive
 form of the same lock and use an already-locked internal reader, so reporting
 cannot observe a partial append and the writer does not recursively reacquire

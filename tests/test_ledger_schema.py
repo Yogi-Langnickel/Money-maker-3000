@@ -64,6 +64,20 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
             path = Path(temp_dir) / "ledger.jsonl"
             self.assertEqual(append_ledger_record(path, record), record)
 
+    def test_append_serializer_rejects_unexpected_nan_after_validation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "serializer-guard.jsonl"
+            with (
+                patch(
+                    "money_maker_3000.ledger._validate_simulation_audit_record",
+                    return_value={"unexpected": float("nan")},
+                ),
+                self.assertRaisesRegex(ValueError, "JSON compliant"),
+            ):
+                append_ledger_record(path, valid_record())
+
+            self.assertFalse(path.exists())
+
     def test_every_required_top_level_field_is_enforced(self):
         for field in SIMULATION_AUDIT_RECORD_KEYS:
             with self.subTest(field=field):

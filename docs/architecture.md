@@ -133,6 +133,11 @@ and out-of-safe-JSON-range numeric facts to `null` before serialization. This
 preserves controlled JSON output with `allow_nan=False`; it does not reinterpret
 those invalid legacy facts.
 
+`allow_nan=False` is also enforced at the final CLI and JSONL append
+serialization boundaries. This independent last-line guard refuses unexpected
+NaN/Infinity output even if upstream validation or legacy normalization
+regresses.
+
 The risk module owns the canonical veto-code catalog used by both risk output
 and v2 ledger validation, including `invalid-risk-state` and
 `invalid-order-intent`. Every risk-gate emission passes through an ownership

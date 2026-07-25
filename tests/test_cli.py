@@ -1,12 +1,16 @@
 import json
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from money_maker_3000.backtest import build_synthetic_backtest
+from money_maker_3000.cli import main
 from money_maker_3000.worker_leases import WorkerLeaseStore
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
@@ -28,6 +32,23 @@ class CliTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def test_cli_serializer_rejects_unexpected_nan_result(self):
+        stdout = StringIO()
+        stderr = StringIO()
+        with (
+            patch(
+                "money_maker_3000.cli.run_ledger_report",
+                return_value={"unexpected": float("nan")},
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            return_code = main(["ledger-report", "unused.jsonl"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "command result is not strict JSON\n")
 
     def test_backtest_cli_runs_historical_fixture_without_provider_calls(self):
         result = self.run_cli(
