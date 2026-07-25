@@ -1,12 +1,16 @@
 import json
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from money_maker_3000.backtest import build_synthetic_backtest
+from money_maker_3000.cli import main
 from money_maker_3000.worker_leases import WorkerLeaseStore
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "market_history" / "spy-daily.csv"
@@ -28,6 +32,23 @@ class CliTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def test_cli_serializer_rejects_unexpected_nan_result(self):
+        stdout = StringIO()
+        stderr = StringIO()
+        with (
+            patch(
+                "money_maker_3000.cli.run_ledger_report",
+                return_value={"unexpected": float("nan")},
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            return_code = main(["ledger-report", "unused.jsonl"])
+
+        self.assertEqual(return_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "command result is not strict JSON\n")
 
     def test_backtest_cli_runs_historical_fixture_without_provider_calls(self):
         result = self.run_cli(
@@ -890,6 +911,51 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["integrity"]["complete"])
         self.assertEqual(payload["integrity"]["acceptedRecordCount"], 1)
         self.assertEqual(payload["integrity"]["rejectedRecordCount"], 0)
+
+    def test_ledger_report_cli_returns_controlled_corruption_for_huge_numbers(self):
+        for value in (10**1000, 1e308):
+            with self.subTest(value_type=type(value).__name__):
+                record = build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"][0]
+                record["allocation"]["botAllocationUsd"] = value
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    ledger_path = Path(temp_dir) / "huge-number-ledger.jsonl"
+                    ledger_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+                    result = self.run_cli("ledger-report", str(ledger_path))
+
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stderr, "")
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["integrity"]["state"], "corrupted")
+                self.assertEqual(payload["integrity"]["issues"][0]["code"], "invalid-audit-record")
+
+    def test_ledger_report_cli_sanitizes_legacy_nonfinite_numbers(self):
+        legacy = {
+            "ledgerVersion": 1,
+            "recordedAt": float("inf"),
+            "correlationId": float("nan"),
+            "runId": 10**1000,
+            "strategyId": "dca-cash-reserve",
+            "decision": "skip",
+            "riskResult": "blocked",
+            "tradeLogEntry": {
+                "action": "simulated-skip",
+                "reasonCode": "blocked",
+                "budgetRemainingUsd": float("nan"),
+            },
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "legacy-numbers.jsonl"
+            ledger_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+            result = self.run_cli("ledger-report", str(ledger_path))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        json.dumps(payload, allow_nan=False)
+        record = payload["records"][0]
+        self.assertIsNone(record["recordedAt"])
+        self.assertIsNone(record["correlationId"])
+        self.assertIsNone(record["runId"])
+        self.assertIsNone(record["tradeLog"]["budgetRemainingUsd"])
 
     def test_lease_report_cli_is_read_only_redacted_and_fail_closed(self):
         observed_at = "2026-07-15T00:00:00Z"

@@ -11,6 +11,7 @@ from money_maker_3000.contracts import (
     DEFAULT_ALLOCATION_POLICY,
     DEFAULT_BUDGET_POLICY,
     DEFAULT_SCHEDULE_POLICY,
+    SIMULATION_CONTRACT_VERSION,
     SIMULATION_CONFIG_CONTRACT,
     default_simulation_config_for_strategy,
     merge_simulation_config,
@@ -22,7 +23,7 @@ from money_maker_3000.providers import build_provider_metadata_snapshot
 from money_maker_3000.risk import DEFAULT_RISK_POLICY, RiskInputState, evaluate_risk_gate
 from money_maker_3000.strategies import strategy_by_id, validate_strategy_registry
 
-CONFIG_VERSION = "0.1.0-sim"
+CONFIG_VERSION = SIMULATION_CONTRACT_VERSION
 
 SYNTHETIC_POSITION_CONTEXT = [
     {
@@ -171,7 +172,7 @@ def build_simulation_run(
         "providerMetadata": build_provider_metadata_snapshot(),
         "positionContext": deepcopy(SYNTHETIC_POSITION_CONTEXT),
         "tradeLogEntry": {
-            "tradeLogId": f"trade-log-{evaluated_at}",
+            "tradeLogId": f"trade-log-{run_id}",
             "correlationId": correlation_id,
             "action": "simulated-skip",
             "strategyId": strategy["strategyId"] if strategy else effective_config["strategyId"],

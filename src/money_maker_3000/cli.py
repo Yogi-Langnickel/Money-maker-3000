@@ -394,7 +394,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    print(json.dumps(result, indent=2, sort_keys=True))
+    try:
+        serialized_result = json.dumps(result, indent=2, sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError):
+        print("command result is not strict JSON", file=sys.stderr)
+        return 1
+    print(serialized_result)
     if args.command == "readiness" and not result.get("ready", False):
         return 1
     if args.command in {"ledger-report", "lease-report"} and not result.get("integrity", {}).get("complete", False):

@@ -2,7 +2,7 @@
 
 Status: active
 Created: 2026-05-15
-Updated: 2026-07-15
+Updated: 2026-07-25
 
 ## Current Truth
 
@@ -160,6 +160,32 @@ Updated: 2026-07-15
   writer lock so duplicate identity checks and JSONL writes are one critical
   section. It rejects sensitive key names and generic scalar values that look
   like emails, provider/account/order IDs, or token-like secrets.
+- `simulation-audit-record.v2` is frozen as an exact diagnostic-only
+  `skip`/`blocked` schema. Top-level, allocation, and nested trade-log fields
+  are all required; timestamps, SHA-256 config hashes, identities, finite
+  allocation values, unique canonical risk vetoes, and parent/nested parity
+  fail closed. Malformed v2 is never defaulted. Explicit v1 is
+  read/report/redact-only, and append refuses a corrupt, legacy, or mixed
+  existing ledger without mutation.
+- JSON duplicate keys at any nesting depth are invalid v2 records. Frozen
+  v2-owned strategy/config version allowlists preserve historical validation
+  independently of current producer versions. Numeric fields reject booleans,
+  nonfinite values, and integers/floats outside the safe JSON range without
+  leaking parser/overflow exceptions. Legacy v1 reporting normalizes unsafe
+  numeric facts to `null` so controlled output remains strict JSON.
+- CLI output and JSONL append serialization independently use
+  `allow_nan=False`; unexpected non-standard numeric output fails closed even
+  if upstream validation or legacy normalization regresses.
+- Public ledger reads use a shared sidecar lock; append uses the exclusive lock
+  plus an already-locked private reader. Generated trade-log IDs are derived
+  from run IDs and validated for parent parity, including multi-run batches.
+  Ordinary reads open/create the writable lock sidecar, requiring lock-file
+  write access and directory write permission on first use; no unlocked archive
+  reader exists.
+- Risk veto codes are canonically shared from `risk.py`; the catalog includes
+  `invalid-risk-state` and `invalid-order-intent`. Actual virtual orders,
+  fills, cash, and positions require a future v3/SQLite event model rather than
+  widening v2.
 - Ledger reporting recovers valid records from malformed JSONL without
   modifying the source. Integrity metadata is structurally validated and
   contains only allowlisted issue codes/counts with raw content absent.
