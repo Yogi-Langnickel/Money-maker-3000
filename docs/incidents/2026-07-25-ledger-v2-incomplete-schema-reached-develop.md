@@ -59,13 +59,25 @@ treated as an append blocker.
 - Required exact top-level, allocation, and trade-log shapes.
 - Added canonical UTC, SHA-256, identifier, finite-number, allocation
   consistency, veto, provider-boundary, and parent/nested parity validation.
+- Rejects duplicate JSON keys at every nesting depth and bool/float legacy
+  version impersonation as controlled invalid-audit records.
+- Validates strategy and config versions against their canonical registry and
+  simulation-contract owners.
+- Rejects oversized integers as controlled corruption without exposing
+  arithmetic exceptions; the CLI emits its normal redacted corruption DTO and
+  exits nonzero.
+- Uses shared reader/exclusive writer locking with a private already-locked
+  scan path, preventing partial-read races without recursive lock acquisition.
+- Binds generated and validated trade-log IDs to run IDs so multi-run
+  diagnostics cannot reuse or detach nested identities.
 - Made direct v2 report construction validate before sanitization, eliminating
   defaults for malformed v2.
 - Limited compatibility recovery to explicit v1 read/report/redact behavior.
 - Made append inspect the existing source through the integrity reader and
   refuse corrupt, legacy, or mixed content without mutation.
 - Moved the canonical risk-veto catalog to `risk.py` and added the previously
-  omitted `invalid-risk-state` and `invalid-order-intent` parity.
+  omitted `invalid-risk-state` and `invalid-order-intent` parity. All risk-gate
+  veto emission now passes through the catalog ownership check.
 - Reserved actual virtual-trade accounting for a future v3/SQLite event model.
 
 ## Prevention
@@ -83,9 +95,11 @@ treated as an append blocker.
 ## Verification
 
 - `tests/test_ledger_schema.py` covers exact shapes, every missing field,
-  unknown fields, versions, timestamps, hashes, numeric edge cases, duplicate
-  and mismatched vetoes, parent/nested mismatches, legacy/corrupt append
-  refusal, and risk-veto parity.
+  unknown and duplicate JSON fields, versions, timestamps, hashes, huge and
+  nonfinite numeric edge cases, duplicate and mismatched vetoes,
+  parent/nested/trade-log identity mismatches, multi-run uniqueness,
+  shared/exclusive lock ordering, legacy/corrupt append refusal, and structural
+  risk-veto parity.
 - Repository compile and full unittest gates pass on the repair branch.
 - No provider, credential, or execution behavior changed.
 

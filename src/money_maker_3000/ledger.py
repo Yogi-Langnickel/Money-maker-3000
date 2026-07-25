@@ -14,9 +14,9 @@ try:
 except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
     fcntl = None
 
-from money_maker_3000.contracts import utc_iso
+from money_maker_3000.contracts import SIMULATION_CONTRACT_VERSION, utc_iso
 from money_maker_3000.risk import RISK_VETO_CODES
-from money_maker_3000.strategies import STRATEGY_REGISTRY
+from money_maker_3000.strategies import STRATEGY_REGISTRY, strategy_by_id
 
 REDACTED = "redacted"
 ABSENT = "absent"
@@ -29,6 +29,7 @@ REPORT_DATA_FRESHNESS = {"fresh", "future-data", "missing", "stale", "unknown"}
 REPORT_VETO_CODES = RISK_VETO_CODES
 REPORT_REASON_CODES = REPORT_RISK_DECISIONS | REPORT_VETO_CODES
 MAX_LEDGER_LINE_BYTES = 64 * 1024
+MAX_SAFE_JSON_INTEGER = (2**53) - 1
 LEDGER_INTEGRITY_STATES = {"clean", "recovered-with-warnings", "corrupted"}
 LEDGER_INTEGRITY_ISSUE_CODES = {
     "oversized-record",
@@ -121,6 +122,10 @@ SIMULATION_AUDIT_TRADE_LOG_KEYS = frozenset(
 CANONICAL_UTC_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
+
+
+class _DuplicateJsonKeyError(ValueError):
+    pass
 
 
 def _redact_value(value: Any) -> Any:
@@ -218,7 +223,7 @@ def append_ledger_record(ledger_path: str | Path, record: dict[str, Any]) -> dic
     path.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_ledger_writer(path):
         if path.exists():
-            recovered = read_ledger_records_with_integrity(path)
+            recovered = _read_ledger_records_with_integrity_locked(path)
             if recovered["integrity"]["state"] != "clean":
                 raise ValueError("existing ledger is not a clean v2 ledger; append refused")
             _reject_duplicate_ledger_identity(recovered["records"], validated_record)
@@ -237,10 +242,15 @@ def read_ledger_records(ledger_path: str | Path) -> list[dict[str, Any]]:
 
 
 def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any]:
+    path = Path(ledger_path)
+    with _shared_ledger_reader(path):
+        return _read_ledger_records_with_integrity_locked(path)
+
+
+def _read_ledger_records_with_integrity_locked(path: Path) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
     nonempty_line_count = 0
-    path = Path(ledger_path)
     with path.open("rb") as source:
         line_number = 0
         while raw_line := source.readline(MAX_LEDGER_LINE_BYTES + 1):
@@ -265,9 +275,12 @@ def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any
                 issues.append(_ledger_integrity_issue(line_number, "invalid-utf8", "error"))
                 continue
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
             except json.JSONDecodeError:
                 issues.append(_ledger_integrity_issue(line_number, "invalid-json", "error"))
+                continue
+            except _DuplicateJsonKeyError:
+                issues.append(_ledger_integrity_issue(line_number, "invalid-audit-record", "error"))
                 continue
             if not isinstance(parsed, dict):
                 issues.append(_ledger_integrity_issue(line_number, "invalid-record-shape", "error"))
@@ -276,7 +289,7 @@ def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any
             if _is_v2_record_candidate(parsed):
                 try:
                     parsed = _validate_simulation_audit_record(parsed)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     issues.append(_ledger_integrity_issue(line_number, "invalid-audit-record", "error"))
                     continue
             elif _is_explicit_legacy_v1_record(parsed):
@@ -305,6 +318,15 @@ def read_ledger_records_with_integrity(ledger_path: str | Path) -> dict[str, Any
             "sourceMutation": "not-attempted",
         },
     }
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in parsed:
+            raise _DuplicateJsonKeyError("ledger JSON object has duplicate keys")
+        parsed[key] = value
+    return parsed
 
 
 def _ledger_integrity_issue(line_number: int, code: str, severity: str) -> dict[str, Any]:
@@ -415,6 +437,11 @@ def _validate_simulation_audit_record(record: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("ledger record must be simulation/synthetic only")
     if record["strategyId"] not in REPORT_STRATEGY_IDS:
         raise ValueError("ledger record strategy is invalid")
+    strategy = strategy_by_id(record["strategyId"])
+    if strategy is None or record["strategyVersion"] != strategy["version"]:
+        raise ValueError("ledger record strategy version is invalid")
+    if record["configVersion"] != SIMULATION_CONTRACT_VERSION:
+        raise ValueError("ledger record config version is invalid")
     if not isinstance(record["configHash"], str) or not SHA256_PATTERN.fullmatch(record["configHash"]):
         raise ValueError("ledger record config hash is invalid")
     if record["decision"] != "skip":
@@ -449,16 +476,17 @@ def _validate_canonical_utc(value: Any) -> None:
         raise ValueError("ledger record timestamp is invalid")
 
 
-def _validate_number(value: Any, field: str, *, positive: bool = False) -> float:
+def _validate_number(value: Any, field: str, *, positive: bool = False) -> int | float:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
-        or not isfinite(value)
+        or (isinstance(value, float) and not isfinite(value))
+        or (isinstance(value, int) and abs(value) > MAX_SAFE_JSON_INTEGER)
         or value < 0
         or (positive and value <= 0)
     ):
         raise ValueError(f"ledger record {field} is invalid")
-    return float(value)
+    return value
 
 
 def _validate_vetoes(value: Any) -> list[str]:
@@ -493,6 +521,8 @@ def _validate_trade_log(value: Any, parent: dict[str, Any], vetoes: list[str]) -
     if not isinstance(value, dict) or set(value) != SIMULATION_AUDIT_TRADE_LOG_KEYS:
         raise ValueError("ledger record trade log is invalid")
     _validate_identifier(value["tradeLogId"], "trade log ID")
+    if value["tradeLogId"] != f"trade-log-{parent['runId']}":
+        raise ValueError("ledger record trade log ID does not match its run")
     matching_fields = (
         "correlationId",
         "strategyId",
@@ -527,7 +557,11 @@ def _is_v2_record_candidate(record: dict[str, Any]) -> bool:
 
 
 def _is_explicit_legacy_v1_record(record: dict[str, Any]) -> bool:
-    return record.get("ledgerVersion") == 1 and record.get("dtoVersion") in (None, "simulation-audit-record.v1")
+    return (
+        type(record.get("ledgerVersion")) is int
+        and record["ledgerVersion"] == 1
+        and record.get("dtoVersion") in (None, "simulation-audit-record.v1")
+    )
 
 
 def _has_unredacted_sensitive_value(value: Any) -> bool:
@@ -553,11 +587,14 @@ def _looks_sensitive_scalar(value: Any) -> bool:
 def _reject_duplicate_ledger_identity(records: list[dict[str, Any]], record: dict[str, Any]) -> None:
     run_id = record.get("runId")
     correlation_id = record.get("correlationId")
+    trade_log_id = record["tradeLogEntry"]["tradeLogId"]
     for existing in records:
         if run_id and existing.get("runId") == run_id:
             raise ValueError("ledger already contains the run identity")
         if correlation_id and existing.get("correlationId") == correlation_id:
             raise ValueError("ledger already contains the correlation identity")
+        if existing["tradeLogEntry"]["tradeLogId"] == trade_log_id:
+            raise ValueError("ledger already contains the trade log identity")
 
 
 def _ledger_lock_path(path: Path) -> Path:
@@ -571,6 +608,19 @@ def _exclusive_ledger_writer(path: Path) -> Iterator[None]:
     lock_path = _ledger_lock_path(path)
     with lock_path.open("a+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _shared_ledger_reader(path: Path) -> Iterator[None]:
+    if fcntl is None:
+        raise OSError("shared ledger reader lock requires POSIX fcntl support")
+    lock_path = _ledger_lock_path(path)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
         try:
             yield
         finally:

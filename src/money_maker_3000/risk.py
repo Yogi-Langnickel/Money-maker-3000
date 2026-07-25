@@ -47,17 +47,17 @@ VALIDATION_VETO_CODES = {
     "simulationConfig": "invalid-simulation-config",
 }
 
+DATA_FRESHNESS_VETO_CODES = frozenset(
+    {"data-future-data", "data-missing", "data-stale", "data-unknown"}
+)
 RISK_VETO_CODES = frozenset(
     {
         *VALIDATION_VETO_CODES.values(),
+        *DATA_FRESHNESS_VETO_CODES,
         "allocation-drawdown-stop",
         "blocked-instrument-class",
         "cash-reserve-floor",
         "daily-loss-stop",
-        "data-future-data",
-        "data-missing",
-        "data-stale",
-        "data-unknown",
         "execution-route-absent",
         "insufficient-available-allocation",
         "invalid-order-intent",
@@ -74,6 +74,12 @@ RISK_VETO_CODES = frozenset(
         "weekly-loss-stop",
     }
 )
+
+
+def _append_veto(vetoes: list[str], code: str) -> None:
+    if code not in RISK_VETO_CODES:
+        raise ValueError("risk gate produced an unsupported veto code")
+    vetoes.append(code)
 
 
 @dataclass(frozen=True)
@@ -346,58 +352,59 @@ def evaluate_risk_gate(
     }
     for validation_name, result in validations.items():
         if not result["ok"]:
-            vetoes.append(VALIDATION_VETO_CODES[validation_name])
+            _append_veto(vetoes, VALIDATION_VETO_CODES[validation_name])
     if not risk_state_valid:
-        vetoes.append("invalid-risk-state")
+        _append_veto(vetoes, "invalid-risk-state")
 
     strategy = strategy_by_id(safe_simulation_config.get("strategyId"))
     selected = safe_simulation_config.get("selectedInstrument", {})
     selected = selected if isinstance(selected, dict) else {}
     if strategy is None:
-        vetoes.append("invalid-strategy-version")
+        _append_veto(vetoes, "invalid-strategy-version")
     elif (
         safe_simulation_config.get("strategyVersion")
         and safe_simulation_config["strategyVersion"] != strategy["version"]
     ):
-        vetoes.append("invalid-strategy-version")
+        _append_veto(vetoes, "invalid-strategy-version")
     if selected.get("instrumentClass") in effective_policy["blockedInstrumentClasses"]:
-        vetoes.append("blocked-instrument-class")
+        _append_veto(vetoes, "blocked-instrument-class")
 
     if state.provider_state != "known-read-only":
-        vetoes.append("unknown-provider-state")
+        _append_veto(vetoes, "unknown-provider-state")
     if state.reconciliation_state != "available":
-        vetoes.append("missing-reconciliation")
+        _append_veto(vetoes, "missing-reconciliation")
     if state.data_freshness != "fresh":
-        vetoes.append(f"data-{state.data_freshness}")
+        _append_veto(vetoes, f"data-{state.data_freshness}")
 
     diagnostics.append("loss/drawdown stops are simulation-only; not evaluated against real PnL")
     if state.daily_loss_usd is None or state.weekly_loss_usd is None or state.allocation_drawdown_usd is None:
-        vetoes.append("missing-loss-reconciliation")
+        _append_veto(vetoes, "missing-loss-reconciliation")
     else:
         if state.daily_loss_usd >= effective_policy["dailyLossStopUsd"]:
-            vetoes.append("daily-loss-stop")
+            _append_veto(vetoes, "daily-loss-stop")
         if state.weekly_loss_usd >= effective_policy["weeklyLossStopUsd"]:
-            vetoes.append("weekly-loss-stop")
+            _append_veto(vetoes, "weekly-loss-stop")
         if state.allocation_drawdown_usd >= effective_policy["maxAllocationDrawdownUsd"]:
-            vetoes.append("allocation-drawdown-stop")
+            _append_veto(vetoes, "allocation-drawdown-stop")
 
     if proposed_order_usd is None:
-        vetoes.append("missing-order-intent")
+        _append_veto(vetoes, "missing-order-intent")
     elif not _positive_number(proposed_order_usd):
-        vetoes.append("invalid-order-intent")
+        _append_veto(vetoes, "invalid-order-intent")
     else:
         if proposed_order_usd > effective_policy["maxOrderUsd"]:
-            vetoes.append("per-order-cap")
+            _append_veto(vetoes, "per-order-cap")
         if proposed_order_usd > effective_allocation["availableUsd"]:
-            vetoes.append("insufficient-available-allocation")
+            _append_veto(vetoes, "insufficient-available-allocation")
         if effective_allocation["availableUsd"] - proposed_order_usd < effective_policy["cashReserveFloorUsd"]:
-            vetoes.append("cash-reserve-floor")
+            _append_veto(vetoes, "cash-reserve-floor")
         if state.instrument_exposure_usd + proposed_order_usd > effective_policy["perInstrumentExposureCapUsd"]:
-            vetoes.append("per-instrument-exposure-cap")
+            _append_veto(vetoes, "per-instrument-exposure-cap")
     if state.open_positions >= effective_policy["maxOpenPositions"]:
-        vetoes.append("max-open-positions")
+        _append_veto(vetoes, "max-open-positions")
 
-    vetoes.extend(("provider-not-connected", "execution-route-absent"))
+    _append_veto(vetoes, "provider-not-connected")
+    _append_veto(vetoes, "execution-route-absent")
     provider_metadata = build_provider_metadata_snapshot()
     safe_allocation = safe_allocation_policy_for_output(effective_allocation)
     return {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import inspect
 import json
 from math import inf, nan
+import multiprocessing
 from pathlib import Path
+import queue
 import tempfile
 import unittest
 
@@ -13,17 +16,35 @@ from money_maker_3000.ledger import (
     SIMULATION_AUDIT_ALLOCATION_KEYS,
     SIMULATION_AUDIT_RECORD_KEYS,
     SIMULATION_AUDIT_TRADE_LOG_KEYS,
+    _exclusive_ledger_writer,
     append_ledger_record,
     build_ledger_record,
     build_ledger_report,
     read_ledger_records,
     read_ledger_records_with_integrity,
 )
-from money_maker_3000.risk import RISK_VETO_CODES, evaluate_risk_gate
+from money_maker_3000.risk import (
+    DATA_FRESHNESS_VETO_CODES,
+    RISK_VETO_CODES,
+    VALIDATION_VETO_CODES,
+    evaluate_risk_gate,
+)
+from money_maker_3000.strategies import strategy_by_id
 
 
 def valid_record() -> dict:
     return deepcopy(build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"][0])
+
+
+def hold_exclusive_ledger_lock(path: str, ready, release) -> None:
+    with _exclusive_ledger_writer(Path(path)):
+        ready.put("locked")
+        release.get(timeout=5)
+
+
+def read_locked_ledger(path: str, started, result) -> None:
+    started.put("started")
+    result.put(read_ledger_records_with_integrity(path))
 
 
 class StrictLedgerV2SchemaTests(unittest.TestCase):
@@ -104,6 +125,26 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
             all(issue["code"] == "invalid-audit-record" for issue in recovered["integrity"]["issues"])
         )
 
+    def test_duplicate_json_keys_are_invalid_at_top_and_nested_depths(self):
+        encoded = json.dumps(valid_record(), separators=(",", ":"))
+        duplicate_top = encoded.replace('{"ledgerVersion":2,', '{"ledgerVersion":2,"ledgerVersion":2,', 1)
+        duplicate_nested = encoded.replace(
+            '"botAllocationUsd":1000.0,',
+            '"botAllocationUsd":1000.0,"botAllocationUsd":1000.0,',
+            1,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "duplicate-keys.jsonl"
+            path.write_text(f"{duplicate_top}\n{duplicate_nested}\n", encoding="utf-8")
+            recovered = read_ledger_records_with_integrity(path)
+
+        self.assertEqual(recovered["records"], [])
+        self.assertEqual(recovered["integrity"]["state"], "corrupted")
+        self.assertEqual(
+            [issue["code"] for issue in recovered["integrity"]["issues"]],
+            ["invalid-audit-record", "invalid-audit-record"],
+        )
+
     def test_explicit_v1_is_read_report_redact_only_and_blocks_append(self):
         legacy = {
             "ledgerVersion": 1,
@@ -126,6 +167,22 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
         self.assertNotIn("operator@example.test", json.dumps(recovered))
         report = build_ledger_report(records=recovered["records"], integrity=recovered["integrity"])
         self.assertEqual(report["records"][0]["decision"], "skip")
+
+    def test_bool_and_float_v1_versions_are_not_legacy_compatible(self):
+        variants = [
+            {"ledgerVersion": True, "dtoVersion": "simulation-audit-record.v1"},
+            {"ledgerVersion": 1.0, "dtoVersion": "simulation-audit-record.v1"},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "invalid-v1.jsonl"
+            path.write_text("".join(json.dumps(record) + "\n" for record in variants), encoding="utf-8")
+            recovered = read_ledger_records_with_integrity(path)
+
+        self.assertEqual(recovered["records"], [])
+        self.assertEqual(recovered["integrity"]["errorCount"], 2)
+        self.assertTrue(
+            all(issue["code"] == "invalid-audit-record" for issue in recovered["integrity"]["issues"])
+        )
 
     def test_corrupt_existing_ledger_blocks_append_without_mutation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -158,6 +215,20 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
         for record in variants:
             self.assert_invalid_append(record)
 
+    def test_strategy_and_config_versions_must_match_canonical_contracts(self):
+        record = valid_record()
+        record["strategyVersion"] = "operator-version"
+        record["tradeLogEntry"]["strategyVersion"] = "operator-version"
+        self.assert_invalid_append(record)
+
+        record = valid_record()
+        record["configVersion"] = "operator-version"
+        self.assert_invalid_append(record)
+
+        strategy = strategy_by_id(valid_record()["strategyId"])
+        self.assertIsNotNone(strategy)
+        self.assertEqual(valid_record()["strategyVersion"], strategy["version"])
+
     def test_invalid_numeric_scalars_booleans_and_nonfinite_values_are_rejected(self):
         for field in ("botAllocationUsd", "reservedUsd", "availableUsd", "maxOrderUsd"):
             for value in (True, -1, nan, inf):
@@ -170,6 +241,18 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
                 record = valid_record()
                 record["tradeLogEntry"]["budgetRemainingUsd"] = value
                 self.assert_invalid_append(record)
+
+    def test_huge_integers_are_controlled_corruption_not_overflow(self):
+        record = valid_record()
+        record["allocation"]["botAllocationUsd"] = 10**1000
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "huge-number.jsonl"
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            recovered = read_ledger_records_with_integrity(path)
+
+        self.assertEqual(recovered["records"], [])
+        self.assertEqual(recovered["integrity"]["state"], "corrupted")
+        self.assertEqual(recovered["integrity"]["issues"][0]["code"], "invalid-audit-record")
 
     def test_frozen_diagnostic_and_provider_boundary_values_are_enforced(self):
         mutations = (
@@ -250,6 +333,61 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
                 record["tradeLogEntry"][field] = "mismatch"
                 self.assert_invalid_append(record)
 
+        record = valid_record()
+        record["tradeLogEntry"]["tradeLogId"] = "trade-log-unbound"
+        self.assert_invalid_append(record)
+
+    def test_multi_record_backtest_trade_log_ids_are_unique_and_bound_to_runs(self):
+        records = build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"]
+        trade_log_ids = [record["tradeLogEntry"]["tradeLogId"] for record in records]
+
+        self.assertGreater(len(records), 1)
+        self.assertEqual(len(trade_log_ids), len(set(trade_log_ids)))
+        self.assertEqual(
+            trade_log_ids,
+            [f"trade-log-{record['runId']}" for record in records],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "multi-run.jsonl"
+            for record in records:
+                append_ledger_record(path, record)
+            self.assertEqual(len(read_ledger_records(path)), len(records))
+
+    def test_public_reader_waits_for_exclusive_writer_lock(self):
+        if "fork" not in multiprocessing.get_all_start_methods():
+            self.skipTest("shared-lock test requires fork-capable multiprocessing")
+
+        context = multiprocessing.get_context("fork")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ledger.jsonl"
+            append_ledger_record(path, valid_record())
+            ready = context.Queue()
+            release = context.Queue()
+            started = context.Queue()
+            result = context.Queue()
+            holder = context.Process(
+                target=hold_exclusive_ledger_lock,
+                args=(str(path), ready, release),
+            )
+            reader = context.Process(
+                target=read_locked_ledger,
+                args=(str(path), started, result),
+            )
+            holder.start()
+            self.assertEqual(ready.get(timeout=2), "locked")
+            reader.start()
+            self.assertEqual(started.get(timeout=2), "started")
+            with self.assertRaises(queue.Empty):
+                result.get(timeout=0.2)
+            release.put("release")
+            recovered = result.get(timeout=2)
+            holder.join(timeout=2)
+            reader.join(timeout=2)
+
+        self.assertEqual(holder.exitcode, 0)
+        self.assertEqual(reader.exitcode, 0)
+        self.assertEqual(recovered["integrity"]["state"], "clean")
+
     def test_report_does_not_default_malformed_v2(self):
         record = valid_record()
         del record["runId"]
@@ -282,7 +420,12 @@ class StrictLedgerV2SchemaTests(unittest.TestCase):
 
         self.assertIn("invalid-risk-state", RISK_VETO_CODES)
         self.assertIn("invalid-order-intent", RISK_VETO_CODES)
+        self.assertTrue(set(VALIDATION_VETO_CODES.values()).issubset(RISK_VETO_CODES))
+        self.assertTrue(DATA_FRESHNESS_VETO_CODES.issubset(RISK_VETO_CODES))
         self.assertTrue(set(risk["vetoes"]).issubset(RISK_VETO_CODES))
+        source = inspect.getsource(evaluate_risk_gate)
+        self.assertNotIn("vetoes.append(", source)
+        self.assertNotIn("vetoes.extend(", source)
 
 
 if __name__ == "__main__":

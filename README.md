@@ -131,15 +131,22 @@ returns exit status `1`, while a clean or warning-only recovery returns `0`.
 can represent only synthetic `skip`/`blocked` outcomes; it is not a virtual
 order or fill record. Every top-level, allocation, and trade-log field is
 required and validated, including canonical UTC timestamps, SHA-256 config
-hashes, identities, finite allocation values, allowlisted unique vetoes, and
-matching parent/trade-log facts. Missing, unknown, mixed-version, and future
-records are rejected instead of being completed with defaults.
+hashes, canonical contract/strategy versions, identities, finite bounded
+allocation values, allowlisted unique vetoes, and matching parent/trade-log
+facts. Trade-log IDs are deterministically bound to run IDs. Missing, unknown,
+duplicate-key, mixed-version, and future records are rejected instead of being
+completed with defaults.
 
 Explicit `simulation-audit-record.v1` records remain read/report/redact-only.
 They cannot be appended to, and an existing corrupt, legacy, or mixed ledger
 blocks further appends without changing the source. Actual virtual orders,
 fills, cash, and positions belong to a separately reviewed v3/SQLite event
 model; v2 will not be widened for that capability.
+
+Readers take a shared sidecar lock while scanning. Appends take the exclusive
+form of the same lock and use an already-locked internal reader, so reporting
+cannot observe a partial append and the writer does not recursively reacquire
+its own lock.
 
 Simulation worker lease report:
 

@@ -167,6 +167,13 @@ Updated: 2026-07-25
   fail closed. Malformed v2 is never defaulted. Explicit v1 is
   read/report/redact-only, and append refuses a corrupt, legacy, or mixed
   existing ledger without mutation.
+- JSON duplicate keys at any nesting depth are invalid v2 records. Strategy and
+  config versions must match the registry and simulation contract. Numeric
+  fields reject booleans, nonfinite values, and integers outside the safe JSON
+  range without leaking parser/overflow exceptions.
+- Public ledger reads use a shared sidecar lock; append uses the exclusive lock
+  plus an already-locked private reader. Generated trade-log IDs are derived
+  from run IDs and validated for parent parity, including multi-run batches.
 - Risk veto codes are canonically shared from `risk.py`; the catalog includes
   `invalid-risk-state` and `invalid-order-intent`. Actual virtual orders,
   fills, cash, and positions require a future v3/SQLite event model rather than

@@ -891,6 +891,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["integrity"]["acceptedRecordCount"], 1)
         self.assertEqual(payload["integrity"]["rejectedRecordCount"], 0)
 
+    def test_ledger_report_cli_returns_controlled_corruption_for_huge_integer(self):
+        record = build_synthetic_backtest(include_ledger_records=True)["ledgerRecords"][0]
+        record["allocation"]["botAllocationUsd"] = 10**1000
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ledger_path = Path(temp_dir) / "huge-number-ledger.jsonl"
+            ledger_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            result = self.run_cli("ledger-report", str(ledger_path))
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr, "")
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["integrity"]["state"], "corrupted")
+        self.assertEqual(payload["integrity"]["issues"][0]["code"], "invalid-audit-record")
+
     def test_lease_report_cli_is_read_only_redacted_and_fail_closed(self):
         observed_at = "2026-07-15T00:00:00Z"
         now = datetime(2026, 7, 15, tzinfo=timezone.utc)

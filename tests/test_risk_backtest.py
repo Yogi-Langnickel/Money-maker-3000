@@ -1065,7 +1065,17 @@ class RiskAndBacktestTests(unittest.TestCase):
                     },
                 )
             with self.assertRaisesRegex(ValueError, "correlation identity"):
-                append_ledger_record(ledger_path, {**record, "runId": "run-other"})
+                append_ledger_record(
+                    ledger_path,
+                    {
+                        **record,
+                        "runId": "run-other",
+                        "tradeLogEntry": {
+                            **record["tradeLogEntry"],
+                            "tradeLogId": "trade-log-run-other",
+                        },
+                    },
+                )
             with self.assertRaisesRegex(ValueError, "fields do not match"):
                 append_ledger_record(
                     ledger_path,
@@ -1090,6 +1100,7 @@ class RiskAndBacktestTests(unittest.TestCase):
                         "correlationId": "acct-real-123",
                         "tradeLogEntry": {
                             **record["tradeLogEntry"],
+                            "tradeLogId": "trade-log-run-fifth",
                             "correlationId": "acct-real-123",
                         },
                     },
@@ -1101,10 +1112,12 @@ class RiskAndBacktestTests(unittest.TestCase):
                         **record,
                         "runId": "run-sixth",
                         "correlationId": "corr-sixth",
+                        "allocationId": "operator@example.test",
                         "tradeLogEntry": {
                             **record["tradeLogEntry"],
-                            "tradeLogId": "operator@example.test",
+                            "tradeLogId": "trade-log-run-sixth",
                             "correlationId": "corr-sixth",
+                            "allocationId": "operator@example.test",
                         },
                     },
                 )
