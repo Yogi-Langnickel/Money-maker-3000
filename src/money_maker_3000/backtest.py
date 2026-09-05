@@ -176,7 +176,10 @@ def iter_decision_events(
             allocation_policy=allocation_policy or DEFAULT_ALLOCATION_POLICY,
             risk_state=RiskInputState(data_freshness=freshness),
             proposed_order_usd=None,
-            run_id_suffix=f"{bar.symbol}-{bar.date}-{index}",
+            # The scheduled occurrence is part of the immutable diagnostic
+            # identity.  Otherwise recurring runs of the same fixture/config
+            # collide on the strict append-only ledger correlation identity.
+            run_id_suffix=f"{utc_iso(started)}-{bar.symbol}-{bar.date}-{index}",
         )
         yield DecisionEvent(eventId=f"decision-{bar.symbol}-{bar.date}-{index}", bar=bar.to_dict(), run=run)
 

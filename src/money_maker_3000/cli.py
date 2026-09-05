@@ -20,6 +20,14 @@ from money_maker_3000.contracts import build_allocation_policy, validate_run_mod
 from money_maker_3000.ledger import export_ledger_report
 from money_maker_3000.market_history import iter_market_history_bars, sha256_file
 from money_maker_3000.offline_runner import run_once
+from money_maker_3000.operations import (
+    build_operations_status,
+    create_snapshot,
+    install_launchd_agent,
+    run_recovery_drill,
+    run_soak_evidence,
+    verify_restore,
+)
 from money_maker_3000.readiness import (
     FixtureReadinessSpec,
     build_allocation_policy_for_readiness,
@@ -145,6 +153,45 @@ def _build_parser() -> argparse.ArgumentParser:
     run_once.add_argument("--idempotency-key", required=True, help="stable opaque key for this scheduled occurrence")
     run_once.add_argument("--started-at", required=True, help="explicit ISO timestamp for deterministic replay evidence")
     run_once.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
+
+    operations = subparsers.add_parser("operations-status", help="inspect offline appliance freshness without mutation")
+    operations.add_argument("--state-path", type=Path, required=True)
+    operations.add_argument("--ledger-path", type=Path, required=True)
+    operations.add_argument("--max-age-hours", type=int, default=48)
+    operations.add_argument("--observed-at", required=True)
+    operations.add_argument("--mode", default="backtest")
+
+    snapshot = subparsers.add_parser("operations-snapshot", help="atomically snapshot clean local offline state")
+    snapshot.add_argument("--state-path", type=Path, required=True)
+    snapshot.add_argument("--ledger-path", type=Path, required=True)
+    snapshot.add_argument("--snapshot-root", type=Path, required=True)
+    snapshot.add_argument("--retain", type=int, default=30)
+    snapshot.add_argument("--created-at", required=True)
+    snapshot.add_argument("--mode", default="backtest")
+
+    soak = subparsers.add_parser("operations-soak-evidence", help="run bounded deterministic offline soak evidence")
+    soak.add_argument("--manifest", type=Path, required=True)
+    soak.add_argument("--days", type=int, default=30)
+    soak.add_argument("--started-at", required=True)
+    soak.add_argument("--mode", default="backtest")
+
+    restore = subparsers.add_parser("operations-restore-verify", help="verify a snapshot only into a new isolated directory")
+    restore.add_argument("--snapshot-root", type=Path, required=True)
+    restore.add_argument("--snapshot-id", required=True)
+    restore.add_argument("--verification-root", type=Path, required=True)
+    restore.add_argument("--observed-at", required=True)
+    restore.add_argument("--mode", default="backtest")
+
+    recovery = subparsers.add_parser("operations-recovery-drill", help="prove isolated crash-after-append recovery")
+    recovery.add_argument("--manifest", type=Path, required=True)
+    recovery.add_argument("--started-at", required=True)
+    recovery.add_argument("--mode", default="backtest")
+
+    install = subparsers.add_parser("operations-install-launchd", help="explicitly install the offline-only launchd agent")
+    install.add_argument("--repository-root", type=Path, required=True)
+    install.add_argument("--launch-agents-dir", type=Path, required=True)
+    install.add_argument("--confirm-install", action="store_true")
+    install.add_argument("--mode", default="backtest")
     return parser
 
 
@@ -301,6 +348,23 @@ def run_once_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def run_operations_command(args: argparse.Namespace) -> dict[str, Any]:
+    _reject_execution_mode(args.mode)
+    if args.command == "operations-status":
+        return build_operations_status(state_path=args.state_path, ledger_path=args.ledger_path, observed_at=_parse_observed_at(args.observed_at), max_age_hours=args.max_age_hours)
+    if args.command == "operations-snapshot":
+        return create_snapshot(state_path=args.state_path, ledger_path=args.ledger_path, snapshot_root=args.snapshot_root, retain=args.retain, created_at=_parse_observed_at(args.created_at))
+    if args.command == "operations-soak-evidence":
+        return run_soak_evidence(manifest_path=args.manifest, days=args.days, started_at=_parse_observed_at(args.started_at))
+    if args.command == "operations-restore-verify":
+        return verify_restore(snapshot_root=args.snapshot_root, snapshot_id=args.snapshot_id, verification_root=args.verification_root, observed_at=_parse_observed_at(args.observed_at))
+    if args.command == "operations-recovery-drill":
+        return run_recovery_drill(manifest_path=args.manifest, started_at=_parse_observed_at(args.started_at))
+    if args.command == "operations-install-launchd":
+        return install_launchd_agent(repository_root=args.repository_root, launch_agents_dir=args.launch_agents_dir, confirm_install=args.confirm_install)
+    raise ValueError("unsupported operations command")
+
+
 def _run_with_optional_profile(profile_path: str | None, func: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     if not profile_path:
         return func()
@@ -415,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_lease_report(args))
         elif args.command == "run-once":
             result = _run_with_optional_profile(args.profile, lambda: run_once_command(args))
+        elif args.command.startswith("operations-"):
+            result = _run_with_optional_profile(args.profile, lambda: run_operations_command(args))
         else:
             parser.error(f"unsupported command: {args.command}")
             return 2
@@ -432,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {"ledger-report", "lease-report"} and not result.get("integrity", {}).get("complete", False):
         return 1
     if args.command == "run-once" and result.get("status") not in {"completed", "already-completed"}:
+        return 1
+    if args.command == "operations-status" and result.get("status") != "ready":
         return 1
     return 0
 
