@@ -19,6 +19,7 @@ from money_maker_3000.backtest import (
 from money_maker_3000.contracts import build_allocation_policy, validate_run_mode, validate_strategy_parameters
 from money_maker_3000.ledger import export_ledger_report
 from money_maker_3000.market_history import iter_market_history_bars, sha256_file
+from money_maker_3000.offline_runner import run_once
 from money_maker_3000.readiness import (
     FixtureReadinessSpec,
     build_allocation_policy_for_readiness,
@@ -132,6 +133,18 @@ def _build_parser() -> argparse.ArgumentParser:
     lease_report.add_argument("--observed-at", help="timezone-aware ISO timestamp; defaults to current UTC time")
     lease_report.add_argument("--lock-wait-seconds", type=float, default=1.0)
     lease_report.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
+
+    run_once = subparsers.add_parser(
+        "run-once",
+        help="run the one approved offline simulation manifest once with a fenced lease",
+    )
+    run_once.add_argument("--manifest", type=Path, required=True, help="the committed allowlisted runner manifest")
+    run_once.add_argument("--state-path", type=Path, required=True, help="local fenced lease-state path")
+    run_once.add_argument("--ledger-path", type=Path, required=True, help="local redacted v2 ledger path")
+    run_once.add_argument("--holder", default="offline-simulation-scheduler", help="opaque local scheduler holder id")
+    run_once.add_argument("--idempotency-key", required=True, help="stable opaque key for this scheduled occurrence")
+    run_once.add_argument("--started-at", required=True, help="explicit ISO timestamp for deterministic replay evidence")
+    run_once.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
     return parser
 
 
@@ -276,6 +289,18 @@ def run_lease_report(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def run_once_command(args: argparse.Namespace) -> dict[str, Any]:
+    _reject_execution_mode(args.mode)
+    return run_once(
+        manifest_path=args.manifest,
+        state_path=args.state_path,
+        ledger_path=args.ledger_path,
+        holder=args.holder,
+        idempotency_key=args.idempotency_key,
+        started_at=_parse_observed_at(args.started_at),
+    )
+
+
 def _run_with_optional_profile(profile_path: str | None, func: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     if not profile_path:
         return func()
@@ -388,6 +413,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_ledger_report(args))
         elif args.command == "lease-report":
             result = _run_with_optional_profile(args.profile, lambda: run_lease_report(args))
+        elif args.command == "run-once":
+            result = _run_with_optional_profile(args.profile, lambda: run_once_command(args))
         else:
             parser.error(f"unsupported command: {args.command}")
             return 2
@@ -403,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "readiness" and not result.get("ready", False):
         return 1
     if args.command in {"ledger-report", "lease-report"} and not result.get("integrity", {}).get("complete", False):
+        return 1
+    if args.command == "run-once" and result.get("status") not in {"completed", "already-completed"}:
         return 1
     return 0
 

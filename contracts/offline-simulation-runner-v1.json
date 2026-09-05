@@ -1,0 +1,19 @@
+{
+  "botAllocationUsd": 1000.0,
+  "budgetUsd": 1000.0,
+  "contractManifest": "dashboard-simulation-contract.json",
+  "contractManifestSha256": "75571c32a3a04a28ebba29c54edc4dadabfc3101bf101f005a2774e113c060f0",
+  "fixtureFile": "spy-slow-trend-202-daily.csv",
+  "fixtureProvenanceManifestSha256": "671d36f6c8f02b2ab0b23e4338d2a5095ba801b3123a95d507b84094fcdcaa5e",
+  "fixtureSha256": "ecaec707c5bc6dccc05f0ed5b52f1110ba08a0e0431c59e0d9223baf9ae546d9",
+  "fixtureProvenanceManifest": "market-history-fixture-provenance.json",
+  "instrumentClass": "ETF",
+  "leaseTtlSeconds": 300,
+  "manifestId": "approved-slow-trend-fixture-diagnostics",
+  "market": "US_EQUITIES",
+  "maxFixtureRows": 10000,
+  "maxOrderUsd": 250.0,
+  "reservedUsd": 100.0,
+  "schemaVersion": "deterministic-offline-simulation-runner.v1",
+  "strategyId": "slow-trend-allocation"
+}

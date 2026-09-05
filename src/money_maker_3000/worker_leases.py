@@ -295,6 +295,83 @@ class WorkerLeaseStore:
             fence=fence,
         )
 
+    def complete_fenced(
+        self,
+        *,
+        holder: str,
+        idempotency_key: str,
+        epoch: str,
+        fence: int,
+        operation: Callable[[], Any],
+    ) -> dict[str, Any]:
+        """Run one local side effect while the active lease is still fenced.
+
+        The callback is deliberately synchronous and runs while the trusted
+        lease-store lock is held.  It is for a small, local, idempotent write
+        (the offline runner's ledger append), never for provider work or a
+        long-running diagnostic.  A callback failure leaves the lease active
+        so a later retry can recover safely.
+        """
+        if not callable(operation):
+            raise TypeError("fenced completion operation must be callable")
+        holder_hash, idempotency_hash, expected_epoch, generation = _validated_credentials(
+            holder, idempotency_key, epoch, fence
+        )
+        with self._lock() as locked:
+            state, identity = _read_state(self.path, directory_fd=locked.directory_fd)
+            _require_credential_epoch(state, locked.epoch, expected_epoch)
+            completion = next(
+                (
+                    marker
+                    for marker in state["completions"]
+                    if marker["idempotencyHash"] == idempotency_hash
+                ),
+                None,
+            )
+            if completion:
+                return {
+                    "status": "already-completed",
+                    "completed": (
+                        completion["holderHash"] == holder_hash and completion["fence"] == generation
+                    ),
+                    "operationResult": None,
+                }
+            instant = self._now()
+            _reject_time_reversal(state, instant)
+            reason = _authorization_reason(state, holder_hash, idempotency_hash, generation, instant)
+            if reason != "authorized":
+                return {"status": reason, "completed": False, "operationResult": None}
+            if len(state["completions"]) >= MAX_COMPLETION_MARKERS:
+                return {"status": "completion-capacity-exhausted", "completed": False, "operationResult": None}
+
+            operation_result = operation()
+            completed_instant = self._now()
+            if completed_instant < instant:
+                raise WorkerLeaseStoreError("observed time reversed during fenced completion")
+            _reject_time_reversal(state, completed_instant)
+            timestamp = _format_time(completed_instant)
+            state["fenceGeneration"] = _next_counter(state["fenceGeneration"], "fence generation")
+            state["revision"] = _next_counter(state["revision"], "revision")
+            state["lastMutationAt"] = timestamp
+            state["lease"] = None
+            state["lastRelease"] = None
+            state["completions"].append(
+                {
+                    "holderHash": holder_hash,
+                    "idempotencyHash": idempotency_hash,
+                    "fence": generation,
+                    "completedAt": timestamp,
+                }
+            )
+            _write_state(
+                self.path,
+                state,
+                self.lock_path,
+                locked=locked,
+                expected_identity=identity,
+            )
+            return {"status": "completed", "completed": True, "operationResult": operation_result}
+
     def _finish_active(
         self,
         *,

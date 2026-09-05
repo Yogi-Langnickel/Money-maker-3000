@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.money-maker-3000.offline-runner</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>zsh</string>
+    <string>-lc</string>
+    <string>cd /ABSOLUTE/PATH/TO/Money-maker-3000 &amp;&amp; PYTHONPATH=src python3.13 -m money_maker_3000.cli run-once --manifest contracts/offline-simulation-runner-v1.json --state-path .local/offline-runner-lease.json --ledger-path .local/offline-runner-ledger.jsonl --idempotency-key daily-$(date -u +%F) --started-at $(date -u +%FT00:00:00Z)</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  <key>WorkingDirectory</key>
+  <string>/ABSOLUTE/PATH/TO/Money-maker-3000</string>
+  <key>StandardOutPath</key>
+  <string>/ABSOLUTE/PATH/TO/Money-maker-3000/.local/offline-runner.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/ABSOLUTE/PATH/TO/Money-maker-3000/.local/offline-runner.err.log</string>
+</dict>
+</plist>
