@@ -58,10 +58,18 @@ def _reject_execution_mode(run_mode: str) -> None:
         raise ValueError(result.errors[0])
 
 
+class _CommandArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        # Subparser conversion/required-argument failures happen before our handler.
+        if self.prog in {"money-maker-3000 learning-train", "money-maker-3000 learning-predict"}:
+            message = "invalid-learning-arguments"
+        super().error(message)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="money-maker-3000", description="Python-first simulation worker CLI")
     parser.add_argument("--profile", metavar="PATH", help="write cProfile stats for this CLI run")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True, parser_class=_CommandArgumentParser)
 
     backtest = subparsers.add_parser("backtest", help="run a deterministic diagnostics-only backtest")
     backtest.add_argument("--mode", default="backtest", help="must be backtest; execute/trade are rejected")
@@ -192,6 +200,20 @@ def _build_parser() -> argparse.ArgumentParser:
     install.add_argument("--launch-agents-dir", type=Path, required=True)
     install.add_argument("--confirm-install", action="store_true")
     install.add_argument("--mode", default="backtest")
+    learning_train = subparsers.add_parser("learning-train", help="fit an offline diagnostic probability model")
+    learning_train.add_argument("--history-csv", type=Path, required=True)
+    learning_train.add_argument("--dataset-manifest", type=Path, required=True)
+    learning_train.add_argument("--strategy", default="volatility-band-accumulator")
+    learning_train.add_argument("--horizon-bars", type=int, default=5)
+    learning_train.add_argument("--train-end", required=True)
+    learning_train.add_argument("--validation-end", required=True)
+    learning_train.add_argument("--output", type=Path, required=True)
+    learning_train.add_argument("--allow-synthetic-smoke", action="store_true")
+    learning_predict = subparsers.add_parser("learning-predict", help="inspect a frozen offline model probability")
+    learning_predict.add_argument("--model", type=Path, required=True)
+    learning_predict.add_argument("--history-csv", type=Path, required=True)
+    learning_predict.add_argument("--dataset-manifest", type=Path, required=True)
+    learning_predict.add_argument("--allow-synthetic-smoke", action="store_true")
     return parser
 
 
@@ -463,9 +485,37 @@ def _validate_strategy_parameters_for_cli(strategy_id: str, parameters: dict[str
         raise ValueError("; ".join(result.errors))
 
 
+def run_learning_command(args: argparse.Namespace) -> dict[str, Any]:
+    from money_maker_3000.learning import LearningError, predict, train, write_artifact
+
+    try:
+        if args.profile:
+            raise LearningError("learning-profile-disabled")
+        if args.command == "learning-train":
+            artifact = train(
+                args.history_csv, args.dataset_manifest, strategy=args.strategy,
+                horizon_bars=args.horizon_bars, train_end=args.train_end,
+                validation_end=args.validation_end,
+                allow_synthetic_smoke=args.allow_synthetic_smoke,
+            )
+            write_artifact(artifact, args.output)
+            return artifact
+        return predict(args.model, args.history_csv, args.dataset_manifest,
+                       allow_synthetic_smoke=args.allow_synthetic_smoke)
+    except LearningError:
+        raise
+    except Exception:
+        raise LearningError("learning-command-failed") from None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+    if unknown:
+        # Root argparse would otherwise echo arbitrary unknown values verbatim.
+        if args.command in {"learning-train", "learning-predict"}:
+            parser.error("invalid-learning-arguments")
+        parser.error("unrecognized arguments: " + " ".join(unknown))
     try:
         if args.command == "backtest":
             result = _run_with_optional_profile(args.profile, lambda: run_backtest(args))
@@ -479,6 +529,8 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_lease_report(args))
         elif args.command == "run-once":
             result = _run_with_optional_profile(args.profile, lambda: run_once_command(args))
+        elif args.command.startswith("learning-"):
+            result = run_learning_command(args)
         elif args.command.startswith("operations-"):
             result = _run_with_optional_profile(args.profile, lambda: run_operations_command(args))
         else:

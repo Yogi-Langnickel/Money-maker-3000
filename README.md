@@ -8,6 +8,16 @@ the same safety semantics the dashboard expects: provider calls blocked,
 execution absent, demo/live execution blocked, and account-linked data
 redacted or absent.
 
+## Offline learning
+
+The [learning pipeline](docs/learning-pipeline.md) fits a local supervised
+probability model with purged chronological training/validation/holdout splits,
+a fixed strategy-feature grid, train-only prior comparisons, and strict frozen
+JSON artifacts. Use `learning-train` and `learning-predict`; the guide includes
+an executable synthetic smoke example and the private dataset manifest format.
+Current supplied data supports smoke testing only. Models remain offline
+classification diagnostics, with no research-readiness or trading claim.
+
 ## Run
 
 Backtest readiness gate:

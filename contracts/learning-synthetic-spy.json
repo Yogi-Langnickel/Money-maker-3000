@@ -1,0 +1,13 @@
+{
+  "version": "learning-dataset.v1",
+  "symbol": "SPY",
+  "classification": "synthetic",
+  "source": "synthetic-test-fixture",
+  "sourceEvidence": "Repository tests/fixtures/market_history/spy-slow-trend-202-daily.csv; deterministic synthetic data, not observed prices.",
+  "licenseEvidence": "Project test data; no observed-market license claimed.",
+  "attribution": "Money-maker-3000 synthetic contract fixture.",
+  "rightsEvidence": "Repository-owned synthetic contract testing only.",
+  "priceBasis": "unadjusted",
+  "sha256": "ecaec707c5bc6dccc05f0ed5b52f1110ba08a0e0431c59e0d9223baf9ae546d9",
+  "rowCount": 202
+}
