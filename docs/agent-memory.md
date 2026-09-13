@@ -296,6 +296,11 @@ Updated: 2026-07-25
 
 ## Read Next
 
+- `docs/continuous-research-protocol.md` for the current frozen research cycle,
+  immutable forward journal, source portability, collector rights gates, and
+  private retention boundaries; `docs/reviews/continuous-research-v1.md` records
+  the reviewed delivery checks.
+
 - `AGENTS.md` for hard safety rules and validation commands.
 - `docs/architecture.md` for Python module boundaries, allocation/risk,
   backtest, and ledger shape.

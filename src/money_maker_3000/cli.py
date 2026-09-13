@@ -214,6 +214,10 @@ def _build_parser() -> argparse.ArgumentParser:
     learning_predict.add_argument("--history-csv", type=Path, required=True)
     learning_predict.add_argument("--dataset-manifest", type=Path, required=True)
     learning_predict.add_argument("--allow-synthetic-smoke", action="store_true")
+    for name in ('research-cycle','research-status','research-replay'):
+        research = subparsers.add_parser(name, help='configured local strategy research workflow')
+        research.add_argument('--config',required=True,type=Path)
+        research.add_argument('--allow-synthetic-smoke',action='store_true')
     return parser
 
 
@@ -529,6 +533,9 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_lease_report(args))
         elif args.command == "run-once":
             result = _run_with_optional_profile(args.profile, lambda: run_once_command(args))
+        elif args.command.startswith("research-"):
+            from money_maker_3000.research_cycle_cli import coordinate
+            result = coordinate(args.config, mode=args.command.removeprefix('research-'), allow_synthetic=args.allow_synthetic_smoke)
         elif args.command.startswith("learning-"):
             result = run_learning_command(args)
         elif args.command.startswith("operations-"):
@@ -537,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"unsupported command: {args.command}")
             return 2
     except Exception as exc:
-        print(str(exc), file=sys.stderr)
+        print("research-command-unavailable" if args.command.startswith("research-") else str(exc), file=sys.stderr)
         return 1
     try:
         serialized_result = json.dumps(result, indent=2, sort_keys=True, allow_nan=False)
@@ -545,6 +552,8 @@ def main(argv: list[str] | None = None) -> int:
         print("command result is not strict JSON", file=sys.stderr)
         return 1
     print(serialized_result)
+    if args.command.startswith("research-") and result.get("status") in ("partial","blocked"):
+        return 1
     if args.command == "readiness" and not result.get("ready", False):
         return 1
     if args.command in {"ledger-report", "lease-report"} and not result.get("integrity", {}).get("complete", False):

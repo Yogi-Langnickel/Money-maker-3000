@@ -52,3 +52,24 @@ PYTHONPATH=src python3.13 -m unittest discover tests
 
 Read `docs/agent-memory.md` for the compact current implementation state,
 performance constraints, and context-retrieval notes.
+
+## Scoped research collector authorization (2026-09-14)
+
+The user's Continuous Strategy Research and Forward Evaluation v1 goal explicitly
+permits a **separate read-only collection component** to use existing external
+credentials and retrieve instrument metadata/completed market observations. This
+narrow exception applies only to `feed_collection.py` and explicitly requested
+collector commands. The simulation worker and learning core remain offline and
+must never load credentials or access provider endpoints.
+
+Only market instrument lookup and historical daily candle GET endpoints are
+within this exception. Account data, portfolios, account mutation, order previews,
+demo/live orders, execution endpoints and all provider writes remain prohibited.
+No credential values may be printed, copied, hashed into evidence, or committed.
+Provider rights, expiry, retention and feed-interpretation gates must pass before
+research data is retained or used. Status and offline replay never load credentials.
+
+The attempted metadata-only probe on 2026-09-14 was rejected by automatic approval
+review under the earlier unconditional rule. This clarification records the
+user-authorized scope; it is not permission to bypass that rejection. Do not retry
+the rejected credential action until its approval conflict is separately resolved.
