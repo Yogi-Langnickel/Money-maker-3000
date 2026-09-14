@@ -70,6 +70,8 @@ Provider rights, expiry, retention and feed-interpretation gates must pass befor
 research data is retained or used. Status and offline replay never load credentials.
 
 The attempted metadata-only probe on 2026-09-14 was rejected by automatic approval
-review under the earlier unconditional rule. This clarification records the
-user-authorized scope; it is not permission to bypass that rejection. Do not retry
-the rejected credential action until its approval conflict is separately resolved.
+review under the earlier unconditional rule. The account holder subsequently
+clarified ordinary API access authorization and automatic review accepted the
+scoped metadata probe, resolving that approval conflict. No further user approval
+is required for these authorized read-only calls. This does not waive provider
+model-use terms or change the existing research-training gate.

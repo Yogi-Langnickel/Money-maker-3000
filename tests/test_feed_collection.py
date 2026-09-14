@@ -202,6 +202,47 @@ class FeedCollectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(CollectionError,'^authentication-failed$'):reader.get('/market-data/search')
             with self.assertRaisesRegex(CollectionError,'collection-stopped'):reader.get('/market-data/search')
 
+    def test_profile_key_families_map_to_correct_headers_without_rewrite(self):
+        profiles = (
+            'ETORO_API_KEY=synthetic-public\nETORO_USER_KEY=synthetic-user\n',
+            '# Existing legacy profile\nexport ETORO_AGENT_PUBLIC_KEY="synthetic-public"\n'
+            "ETORO_AGENT_PRIVAT_KEY='synthetic-user'\nUNRELATED=ignored\n",
+        )
+        for profile in profiles:
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'profile';path.write_text(profile);path.chmod(0o600)
+                reader=EtoroReader(path)
+                with patch.object(reader._opener,'open',side_effect=urllib.error.HTTPError('synthetic',401,'',{},None)) as opened:
+                    with self.assertRaisesRegex(CollectionError,'^authentication-failed$'):
+                        reader.get('/market-data/search')
+                headers=dict(opened.call_args.args[0].header_items())
+                self.assertEqual(headers['X-api-key'],'synthetic-public')
+                self.assertEqual(headers['X-user-key'],'synthetic-user')
+                self.assertEqual(path.read_text(),profile)
+
+    def test_profile_duplicate_missing_and_mixed_families_fail_before_transport(self):
+        canonical=['ETORO_API_KEY=synthetic-public','ETORO_USER_KEY=synthetic-user']
+        legacy=['ETORO_AGENT_PUBLIC_KEY=synthetic-public','ETORO_AGENT_PRIVAT_KEY=synthetic-user']
+        cases=[([], 'missing-fields')]
+        for family in (canonical,legacy):
+            cases.extend(([line], 'missing-fields') for line in family)
+            for line in family:
+                cases.extend((family+[extra], 'invalid') for extra in (line,line+'-conflict'))
+        for left in canonical:
+            for right in legacy:
+                cases.append(([left,right], 'ambiguous-fields'))
+        cases.extend((canonical+[line], 'ambiguous-fields') for line in legacy)
+        cases.extend((legacy+[line], 'ambiguous-fields') for line in canonical)
+        cases.append((canonical+legacy, 'ambiguous-fields'))
+        cases.append((canonical+[legacy[0]+'-conflict'], 'ambiguous-fields'))
+        for lines,reason in cases:
+            with self.subTest(lines=lines), tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'profile';path.write_text('\n'.join(lines));path.chmod(0o600)
+                with patch('money_maker_3000.feed_collection.urllib.request.build_opener') as transport:
+                    with self.assertRaisesRegex(CollectionError,'^credential-profile-'+reason+'$'):
+                        EtoroReader(path)
+                    transport.assert_not_called()
+
     def test_foreign_policy_and_bad_meaning_preflight_before_any_get(self):
         for policy, meaning in [({**POLICY, 'source':'fmp'}, MEANING),
                                 ({**POLICY, 'writtenModelUseException':False}, MEANING),

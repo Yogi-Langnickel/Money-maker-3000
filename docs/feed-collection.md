@@ -7,14 +7,30 @@ Existing external credentials are read in process without logging, copying or
 hashing their values. Profiles require an owner-only regular file with one link;
 redirects and proxy forwarding are disabled. Errors contain controlled codes.
 
-The current eToro research rights gate is **closed**. The official
+Profiles accept exactly one complete naming pair: `ETORO_API_KEY` and
+`ETORO_USER_KEY`, or the existing legacy names `ETORO_AGENT_PUBLIC_KEY` and
+`ETORO_AGENT_PRIVAT_KEY`. The public/application key maps to `x-api-key`; the
+user/private key maps to `x-user-key`. Duplicate keys and any mixture of the two
+families are rejected before transport construction, even if values agree. The
+profile is never rewritten and shell expressions are never evaluated.
+
+The account holder has authorized ordinary read-only API access for this task.
+The official [personal-use guidance](https://builders.etoro.com/use-cases/personal-use)
+and [app-registration guidance](https://builders.etoro.com/app-registration),
+reviewed 2026-09-14, describe personal research and private learning tools using
+personal API keys. No additional user approval is required for the scoped reads.
+
+The current model-training research gate remains **closed**. The official
 [Builders Economy terms](https://www.etoro.com/wp-content/uploads/2026/03/Master_eToro_Builders_Economy_Terms_17-Feb-2026-clean_R.pdf)
-reviewed 2026-09-14 prohibit using Licensed Content to train, fine-tune or ground
-models (Part V 1.7), constrain caching outside permitted use (1.8), and require
-removal within 24 hours on provider request (Part II 3). General user permission
-to retrieve data does not establish an exception to those provider restrictions.
-A reviewed written exception covering this research and its retained artifacts
-is required before any research collection. No exception has been inferred.
+reviewed 2026-09-14 restrict using Licensed Content for model training, fine-tuning
+or grounding (Part V 1.7). Applying this restriction to the probability-model
+fitting in this workflow is the implementation's conservative interpretation;
+the personal-use pages do not document an exception for that fitting. The existing
+gate therefore requires reviewed written model-use evidence before collecting
+prices for this training workflow. This is not a blanket storage prohibition:
+Part V 1.8 restricts databases beyond Permitted Use, and Part II 2.4(c) limits
+caching beyond what is reasonably required. Applicable removal obligations,
+including removal within 24 hours on provider request (Part II 3), still apply.
 
 ## Endpoint and interpretation evidence
 
@@ -105,14 +121,29 @@ PYTHONPATH=src python3.13 -m money_maker_3000.feed_collection \
 `--ca-file` optionally selects an existing trusted CA bundle. TLS validation
 cannot be disabled. No command above authorizes changing provider rights status.
 
-The 2026-09-14 live metadata probe did **not execute**: automatic approval review
-rejected authenticated use of the existing profile because the earlier repository
-instructions prohibit credential loading/API calls. The user goal authorizes a
-scoped separate component, but that conflict needs resolution before retrying the
-blocked action. Existing profile metadata was checked without exposing contents:
-owner-only regular file, mode 0600, one link. Current authentication/entitlement
-and instrument availability remain unverified; an older HTTP 401 is not a
-current result. No eToro prices were retained and no eToro model was trained.
+The initial 2026-09-14 metadata probe was rejected by automatic approval review
+under the earlier repository rule. The account holder then clarified access
+authorization, and automatic review accepted the subsequent scoped probe. That
+attempt stopped locally with `credential-profile-missing-fields` before HTTP
+because the existing profile used the legacy names now supported above. No
+credentials were exposed or rewritten. Existing profile metadata was checked:
+owner-only regular file, mode 0600, one link. Authentication, entitlement and
+instrument availability still require a successful request; an older HTTP 401
+is not a current result. No eToro prices were retained and no eToro model trained
+by that attempt.
+
+After the compatibility patch passed both persona review iterations, the
+authorized metadata-only probe on 2026-09-14 made one SPY instrument-search GET.
+HTTP 403 produced the controlled `entitlement-failed` code; QQQ and VAS were
+`collection-stopped`, with no further requests. The code describes the response
+handling, not a verified account or licensing diagnosis. Key scope, IP/access
+policy, or an intermediary such as a WAF remain possible unresolved causes.
+A bounded follow-up diagnostic found `cloudflare` and `access denied` markers
+in the JSON response and a CF-Ray header, with no WWW-Authenticate header. This
+supports an edge-access response interpretation; it does not establish why access
+was denied. Raw response text and header identifiers were not retained here.
+Instrument availability was not verified. No prices or account data were requested
+or retained, and the separate model-training gate remains unchanged.
 
 Focused synthetic tests cover nullable fields, malformed ranges/numbers,
 uncompleted candles, duplicates/conflicts, source mismatch, rights expiry,

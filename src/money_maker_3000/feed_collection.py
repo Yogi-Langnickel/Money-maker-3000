@@ -249,13 +249,15 @@ class EtoroReader:
     def __init__(self, profile: Path, *, ca_file: str | None = None):
         text = _private_read(profile, 32768).decode("utf-8")
         values = {}
+        canonical = {"ETORO_API_KEY", "ETORO_USER_KEY"}
+        legacy = {"ETORO_AGENT_PUBLIC_KEY", "ETORO_AGENT_PRIVAT_KEY"}
         for line in text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             key, sep, value = line.partition("=")
             key = key.removeprefix("export ").strip()
-            if key not in ("ETORO_API_KEY", "ETORO_USER_KEY"):
+            if key not in canonical | legacy:
                 continue
             if key in values or not sep:
                 raise CollectionError("credential-profile-invalid")
@@ -265,7 +267,12 @@ class EtoroReader:
             if not value or any(c in value for c in "\r\n\x00"):
                 raise CollectionError("credential-profile-invalid")
             values[key] = value
-        if set(values) != {"ETORO_API_KEY", "ETORO_USER_KEY"}:
+        if canonical.intersection(values) and legacy.intersection(values):
+            raise CollectionError("credential-profile-ambiguous-fields")
+        if set(values) == legacy:
+            values = {"ETORO_API_KEY": values["ETORO_AGENT_PUBLIC_KEY"],
+                      "ETORO_USER_KEY": values["ETORO_AGENT_PRIVAT_KEY"]}
+        elif set(values) != canonical:
             raise CollectionError("credential-profile-missing-fields")
         self._credentials = values
         context = ssl.create_default_context(cafile=ca_file)

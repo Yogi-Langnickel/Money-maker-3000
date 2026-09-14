@@ -87,6 +87,25 @@ The accepted implementation is unchanged after final persona acceptance. Subsequ
 public edits are this review log and a brief repository context index link. Private
 final-cycle, no-change repeat, status, and integrity-replay artifacts are written
 to the authoritative worktree's ignored storage with an explicit FMP deletion map.
-The current eToro rights gate remains blocked before credential access; the earlier
-rejected probe is not retried. No private source observations, metrics, hashes,
+At that delivery, the eToro research gate blocked credential access and the earlier
+rejected probe had not been retried. No private source observations, metrics, hashes,
 configurations, or model identifiers are included in this log.
+
+## Profile compatibility follow-up (2026-09-14)
+
+The bounded research-core developer added support for the existing legacy public
+and private credential names alongside the canonical naming pair. Mixed naming
+families and duplicates fail before transport construction; synthetic tests check
+header mapping and preservation of the profile. The account holder's clarified
+ordinary read-only authorization is recorded separately from the unchanged
+model-training gate and its specific terms interpretation.
+
+Both QA and domain personas accepted two iterations without required findings on
+frozen patch fingerprint
+`d5a0f44f0efab6e50d11df0e1d1e309ecfb73650c2db4eb6b2bbd2d79c70e53e`.
+The 33 focused collector tests passed. Compile and all 301 tests passed in the
+developer run (58.634 seconds) and independent coordinator run (58.801 seconds).
+The subsequently authorized metadata-only probe returned HTTP 403 for the first
+instrument search and stopped remaining requests; its cause remains unresolved.
+The final documentation records this controlled finding without credential values,
+raw responses, private evidence, or changes to the reviewed implementation.
