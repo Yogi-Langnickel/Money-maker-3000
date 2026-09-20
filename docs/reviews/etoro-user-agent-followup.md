@@ -27,6 +27,12 @@ payloads, account information, or observations.
 
 The added synthetic transport test asserts the exact User-Agent, the presence
 of required header names, absence of `Authorization`, and in-memory request-ID
-handoff. No provider request was made. Full standard-library validation and
-compilation passed on this branch before review. No post-change provider
-request or access outcome has yet been verified.
+handoff. A later account-holder-supplied, sanitized metadata-only observation
+showed that the custom User-Agent and required authentication headers reached
+HTTP 200. Explicitly requesting `instrumentId` produced a duplicate JSON key;
+omitting that redundant field returned a unique SPY match with an ID, display
+name, and exchange but no `instrumentType`. The collector keeps its strict
+parser and rejects that incomplete response as
+`instrument-type-or-exchange-unverified`. No price history was retained and no
+predictive or portability claim follows. Full standard-library validation and
+compilation passed on this branch before review.

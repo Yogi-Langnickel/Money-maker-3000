@@ -41,8 +41,14 @@ ID. The collector exposes that current request ID only as in-memory
 `last_request_id`; header values and payloads remain unretained. Any later successful
 retrieval still needs separate instrument, session, price-basis, adjustment,
 cost, model-use, and retention evidence before research use or portability can
-be assessed. No post-change provider request or access outcome has yet been
-verified.
+be assessed. A later account-holder-supplied, sanitized metadata-only
+observation verified that the custom User-Agent and required authentication
+headers reached HTTP 200. It also found that explicitly requesting
+`instrumentId` produced duplicate JSON keys. Omitting that redundant field
+returned a unique SPY match with an ID, display name, and exchange, but no
+`instrumentType`; the collector therefore remains fail-closed at
+`instrument-type-or-exchange-unverified`. No price history was retained, and
+this observation is not predictive or portability evidence.
 
 ## Sources
 

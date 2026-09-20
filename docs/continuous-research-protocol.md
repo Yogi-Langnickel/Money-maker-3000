@@ -154,8 +154,20 @@ an application-authentication result rather than this documented edge block
 and must be escalated with that new request ID, without retaining header values
 or provider payloads. `EtoroReader.last_request_id` retains that identifier in
 memory only for the immediately preceding request; it is never serialized,
-logged, or included in research evidence. No post-change provider request or
-access outcome has yet been verified.
+logged, or included in research evidence. No post-change price-history request
+or research-access outcome has yet been verified.
+
+The account holder's sanitized post-change metadata-only observation records
+that the custom User-Agent and required authentication headers reached HTTP 200.
+Requesting `instrumentId` explicitly produced a duplicate JSON key, while the
+same search without that requested field returned a unique exact SPY match with
+an instrument ID, display name, and exchange. The response did not provide
+`instrumentType`, so the collector correctly stopped with
+`instrument-type-or-exchange-unverified`; it does not infer a type from the
+other fields. The collector therefore omits only the redundant requested field
+and keeps its duplicate-key parser and identity/type checks strict. This was a
+metadata-only observation: no price history was retained, and it supports no
+predictive or portability claim.
 
 The eToro terms/model-use and retention evidence remains a separate fail-closed
 requirement before observations, derived models, or mixed reports are retained

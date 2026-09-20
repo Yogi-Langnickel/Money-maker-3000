@@ -375,7 +375,7 @@ def resolve_instrument(reader, symbol: str) -> dict:
     if symbol not in SYMBOLS:
         raise CollectionError("symbol-not-allowlisted")
     ticker, currency, names = SYMBOLS[symbol]
-    payload = reader.get("/market-data/search", {"fields": "instrumentId,internalSymbolFull,displayname,instrumentType,internalExchangeName", "internalSymbolFull": ticker, "pageSize": 10, "pageNumber": 1})
+    payload = reader.get("/market-data/search", {"fields": "internalSymbolFull,displayname,instrumentType,internalExchangeName", "internalSymbolFull": ticker, "pageSize": 10, "pageNumber": 1})
     items = payload.get("items")
     if not isinstance(items, list):
         raise CollectionError("invalid-search-response")

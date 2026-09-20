@@ -167,8 +167,22 @@ class FeedCollectionTests(unittest.TestCase):
         self.assertEqual(len(reader.calls),0)
 
     def test_instrument_currency_is_not_falsely_verified(self):
-        mapping=resolve_instrument(FakeReader(),'SPY')
+        reader=FakeReader()
+        mapping=resolve_instrument(reader,'SPY')
+        self.assertEqual(reader.calls,[('/market-data/search',{
+            'fields':'internalSymbolFull,displayname,instrumentType,internalExchangeName',
+            'internalSymbolFull':'SPY','pageSize':10,'pageNumber':1
+        })])
         self.assertIn('not-returned',mapping['currencyVerification'])
+
+    def test_search_missing_instrument_type_stays_fail_closed(self):
+        reader=FakeReader()
+        reader.get=lambda path, query=None: {'items':[
+            {'instrumentId':1,'internalSymbolFull':'SPY','displayname':'SPDR S&P 500',
+             'internalExchangeName':'NYSE'}
+        ]}
+        with self.assertRaisesRegex(CollectionError,'^instrument-type-or-exchange-unverified$'):
+            resolve_instrument(reader,'SPY')
 
     def test_versions_replay_and_revision_preserve_original(self):
         with tempfile.TemporaryDirectory() as tmp:
