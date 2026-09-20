@@ -27,8 +27,9 @@ classification.
 
 ## Scope and follow-up
 
-eToro support later confirmed that the edge rule rejected urllib's default
-`Python-urllib/3.13` User-Agent before the Public API processed the request.
+The account holder later supplied eToro support guidance that the edge rule
+rejected urllib's default `Python-urllib/3.13` User-Agent before the Public API
+processed the request.
 The collector now uses eToro's supplied, fixed `personal-research-client/1.0`
 identifier on its existing read-only allowlisted GET requests. It does not
 impersonate a browser, alter credentials, add a Bearer token, or make a live
@@ -39,7 +40,8 @@ ID. The collector exposes that current request ID only as in-memory
 `last_request_id`; header values and payloads remain unretained. Any later successful
 retrieval still needs separate instrument, session, price-basis, adjustment,
 cost, model-use, and retention evidence before research use or portability can
-be assessed.
+be assessed. No post-change provider request or access outcome has yet been
+verified.
 
 ## Sources
 

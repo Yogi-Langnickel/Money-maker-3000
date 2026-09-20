@@ -139,8 +139,9 @@ other 403 is `http-forbidden-cause-unresolved`. Both stop the collection run.
 Neither classification diagnoses credentials, entitlement, account status, or
 the provider's security rule.
 
-On 2026-09-21, eToro support identified the observed Error 1010 as its
-Cloudflare Browser Integrity Check rejecting urllib's default
+On 2026-09-21, the account holder supplied eToro support guidance identifying
+the observed Error 1010 as its Cloudflare Browser Integrity Check rejecting
+urllib's default
 `Python-urllib/3.13` identifier before the Public API receives the request.
 The separately authorized collector therefore sends the fixed,
 non-browser `personal-research-client/1.0` User-Agent on its existing
@@ -152,7 +153,8 @@ an application-authentication result rather than this documented edge block
 and must be escalated with that new request ID, without retaining header values
 or provider payloads. `EtoroReader.last_request_id` retains that identifier in
 memory only for the immediately preceding request; it is never serialized,
-logged, or included in research evidence.
+logged, or included in research evidence. No post-change provider request or
+access outcome has yet been verified.
 
 The eToro terms/model-use and retention evidence remains a separate fail-closed
 requirement before observations, derived models, or mixed reports are retained

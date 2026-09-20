@@ -9,11 +9,12 @@ retention gate, and model-use gate are unchanged.
 
 ## Provider-confirmed transport fact
 
-On 21 September 2026, eToro support confirmed that Cloudflare Error 1010 was a
-Browser Integrity Check rejection of urllib's default `Python-urllib/3.13`
-User-Agent before the Public API handled the request. Support specified the
-fixed `personal-research-client/1.0` identifier for the existing instrument
-search request and confirmed the `x-api-key`, `x-user-key`, and
+On 21 September 2026, the account holder supplied eToro support guidance that
+Cloudflare Error 1010 was a Browser Integrity Check rejection of urllib's
+default `Python-urllib/3.13` User-Agent before the Public API handled the
+request. The guidance specified the fixed `personal-research-client/1.0`
+identifier for the existing instrument search request and confirmed the
+`x-api-key`, `x-user-key`, and
 `x-request-id` authentication pattern. It instructed that no Bearer token be
 added to that call.
 
@@ -27,4 +28,5 @@ payloads, account information, or observations.
 The added synthetic transport test asserts the exact User-Agent, the presence
 of required header names, absence of `Authorization`, and in-memory request-ID
 handoff. No provider request was made. Full standard-library validation and
-compilation passed on this branch before review.
+compilation passed on this branch before review. No post-change provider
+request or access outcome has yet been verified.
