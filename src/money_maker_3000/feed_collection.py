@@ -29,6 +29,9 @@ TERMS_URL = "https://www.etoro.com/wp-content/uploads/2026/03/Master_eToro_Build
 DOCS_URL = "https://api-portal.etoro.com/api-reference/market-data/get-instrument-candle-history"
 SYMBOLS = {"SPY": ("SPY", "USD", ("spdr", "s&p")), "QQQ": ("QQQ", "USD", ("invesco", "qqq")), "VAS": ("VAS.ASX", "AUD", ("vanguard", "australian"))}
 PRICE_FIELDS = ("open", "high", "low", "close", "volume")
+HTTP_ERROR_BODY_CAP = 16 * 1024
+_CLOUDFLARE_BROWSER_SIGNATURE_TITLE = "Error 1010: Access denied"
+_CLOUDFLARE_BROWSER_SIGNATURE_DETAIL = "The site owner has blocked access based on your browser's signature."
 
 
 class CollectionError(ValueError):
@@ -43,6 +46,10 @@ def _utc(value: str) -> datetime:
         return stamp.astimezone(timezone.utc)
     except (AttributeError, TypeError, ValueError):
         raise CollectionError("invalid-timestamp") from None
+
+
+def _instrument_id(value: object) -> bool:
+    return type(value) is int and 0 < value < 2**31
 
 
 def _canonical(value: object) -> bytes:
@@ -125,23 +132,30 @@ def parse_candles(payload: dict, instrument_id: int, retrieved_at: str) -> dict:
     A candle must have started at least 26 hours before retrieval. This is a
     conservative completion policy, not a verified exchange-session calendar.
     """
+    if not _instrument_id(instrument_id):
+        raise CollectionError("candle-instrument-mismatch")
     now = _utc(retrieved_at)
     if not isinstance(payload, dict) or payload.get("interval") != "OneDay":
         raise CollectionError("unexpected-candle-interval")
     groups = payload.get("candles")
-    if not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], dict) or groups[0].get("instrumentId") != instrument_id:
+    if (not isinstance(groups, list) or len(groups) != 1 or not isinstance(groups[0], dict)
+            or type(groups[0].get("instrumentId")) is not int
+            or groups[0].get("instrumentId") != instrument_id):
         raise CollectionError("candle-instrument-mismatch")
     candles = groups[0].get("candles")
     if not isinstance(candles, list) or len(candles) > 1000:
         raise CollectionError("invalid-candle-count")
     observations, duplicates, unfinished = {}, 0, 0
     for candle in candles:
-        if not isinstance(candle, dict) or candle.get("instrumentID") != instrument_id:
+        if (not isinstance(candle, dict) or type(candle.get("instrumentID")) is not int
+                or candle.get("instrumentID") != instrument_id):
             raise CollectionError("candle-instrument-mismatch")
         stamp = _utc(candle.get("fromDate"))
         row = {"date": stamp.date().isoformat(), "timestamp": stamp.isoformat().replace("+00:00", "Z"), **{f: candle.get(f) for f in PRICE_FIELDS}}
         validate_observations([row])
-        if stamp + timedelta(hours=26) > now:
+        # Subtraction avoids overflowing at datetime.max while preserving the
+        # exact 26-hour completion boundary.
+        if now - stamp < timedelta(hours=26):
             unfinished += 1
             continue
         prior = observations.get(row["date"])
@@ -244,6 +258,33 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise CollectionError("redirect-blocked")
 
 
+def _forbidden_code(error: urllib.error.HTTPError) -> str:
+    """Classify only one documented, bounded 403 envelope without retaining it."""
+    try:
+        body = error.read(HTTP_ERROR_BODY_CAP + 1)
+    except Exception:
+        return "http-forbidden-cause-unresolved"
+    if not isinstance(body, bytes) or len(body) > HTTP_ERROR_BODY_CAP:
+        return "http-forbidden-cause-unresolved"
+    try:
+        envelope = _json(body)
+    except CollectionError:
+        return "http-forbidden-cause-unresolved"
+    if (isinstance(envelope, dict) and set(envelope) == {"title", "detail"}
+            and envelope.get("title") == _CLOUDFLARE_BROWSER_SIGNATURE_TITLE
+            and envelope.get("detail") == _CLOUDFLARE_BROWSER_SIGNATURE_DETAIL):
+        return "cloudflare-browser-signature-block"
+    return "http-forbidden-cause-unresolved"
+
+
+def _close_http_error(error: urllib.error.HTTPError) -> None:
+    try:
+        error.close()
+    except Exception:
+        # The transport failure is already represented by a controlled code.
+        pass
+
+
 class EtoroReader:
     """GET-only exact endpoint allowlist; credentials never exposed in repr/output."""
     def __init__(self, profile: Path, *, ca_file: str | None = None):
@@ -313,10 +354,15 @@ class EtoroReader:
                 return result
         except urllib.error.HTTPError as exc:
             status = exc.code
-            exc.close()
+            try:
+                code = (
+                    _forbidden_code(exc) if status == 403 else
+                    {401: "authentication-failed", 404: "instrument-unavailable", 429: "rate-limit-stop"}.get(status, "provider-http-failure")
+                )
+            finally:
+                _close_http_error(exc)
             if status in (401, 403, 429):
                 self._stopped = True
-            code = {401: "authentication-failed", 403: "entitlement-failed", 404: "instrument-unavailable", 429: "rate-limit-stop"}.get(status, "provider-http-failure")
             raise CollectionError(code) from None
         except (urllib.error.URLError, OSError, TimeoutError):
             raise CollectionError("provider-transport-failure") from None
@@ -338,7 +384,7 @@ def resolve_instrument(reader, symbol: str) -> dict:
     name = item.get("displayname", "")
     kind = item.get("instrumentType", "")
     exchange = item.get("internalExchangeName", "")
-    if type(instrument_id) is not int or instrument_id <= 0 or not isinstance(name, str) or not all(n in name.lower() for n in names):
+    if not _instrument_id(instrument_id) or not isinstance(name, str) or not all(n in name.lower() for n in names):
         raise CollectionError("instrument-identity-unverified")
     if not isinstance(kind, str) or kind.lower() not in ("etf", "etfs", "exchange traded fund") or not isinstance(exchange, str) or not exchange:
         raise CollectionError("instrument-type-or-exchange-unverified")
@@ -397,7 +443,8 @@ def persist_version(root: Path, *, symbol: str, observations: list[dict], interp
     check_retention(retention, datetime.now(timezone.utc).isoformat())
     validate_interpretation(interpretation, symbol)
     rows = list(validate_observations(observations))
-    if any(_utc(row["timestamp"]) + timedelta(hours=26) > _utc(retrieved_at) for row in rows):
+    retrieved = _utc(retrieved_at)
+    if any(retrieved - _utc(row["timestamp"]) < timedelta(hours=26) for row in rows):
         raise CollectionError("unfinished-observation")
     if not rows:
         raise CollectionError("no-completed-observations")
@@ -517,7 +564,7 @@ def collect(reader, *, symbols=("SPY", "QQQ", "VAS"), retrieved_at: str,
         except CollectionError as exc:
             reason = str(exc)
             reports.append({"symbol": symbol, "status": "unavailable", "reason": reason})
-            stopped = reason in ("authentication-failed", "entitlement-failed", "rate-limit-stop", "collection-stopped")
+            stopped = reason in ("authentication-failed", "cloudflare-browser-signature-block", "http-forbidden-cause-unresolved", "rate-limit-stop", "collection-stopped")
     return {"schemaVersion": "feed-collection-status.v1", "retrievedAt": retrieved_at, "source": "etoro", "instruments": reports,
             "researchRights": "approved-by-supplied-evidence" if retention and retention.get("writtenModelUseException") is True and retention.get("researchAllowed") is True else "requires-reviewed-written-exception", "accountData": "absent", "execution": "blocked"}
 

@@ -127,6 +127,40 @@ can start after the previous fixed comparisons finish and at least 60 observatio
 arrive after its known-history endpoint. It inherits the current research
 reference, and its forecast evidence begins at its own actual freeze time.
 
+## eToro access, transport, and semantic gates
+
+Account-holder authorization for a scoped, read-only public API request is an
+access authorization. It does not establish that a request will pass eToro or
+its edge provider's transport controls, and it does not satisfy the separate
+model-use or retention gate. The collector records only controlled transport
+classifications. A bounded 16 KiB HTTP 403 envelope may identify the specific
+Cloudflare browser-signature block observed during the metadata search; every
+other 403 is `http-forbidden-cause-unresolved`. Both stop the collection run.
+Neither classification diagnoses credentials, entitlement, account status, or
+the provider's security rule.
+
+The eToro terms/model-use and retention evidence remains a separate fail-closed
+requirement before observations, derived models, or mixed reports are retained
+or used for research. Resolving an API transport block does not approve model
+use or retention, and a written model-use/retention exception does not override
+provider transport controls.
+
+`market-observations.v2` stores a candle's normalized UTC instant and derived
+UTC date. It does not preserve the original `fromDate` text or its UTC offset.
+Consequently, the original source timestamp convention, exchange session
+mapping, close definition, adjustment treatment, and cost treatment remain
+unresolved until future provider provenance supplies them. This collector cannot
+support an eToro semantic-portability verdict from timestamp normalization alone.
+
+Any future eToro comparison must retain the existing frozen strategy-specific
+`TOLERANCES`, select a configuration from the source side only, and evaluate it
+on eToro without target-side retuning. The current API candle contract is limited
+to the latest 1,000 daily observations with no documented date cursor, so a
+comparison must first demonstrate enough reserved coverage for each strategy's
+predeclared samples and stressed-period requirements. Same-market source
+agreement is data-source robustness only; it is not an independent confirmation
+of predictive ability.
+
 Final readers validate protocol, model, experiment, forecast, and score contracts,
 including the six-observation outcome window, saved probability, exact Brier
 calculation, chronological availability, and revision chain. Earlier engineering

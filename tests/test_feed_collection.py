@@ -1,5 +1,6 @@
 """Synthetic provider-contract tests; no observed prices or credentials."""
 from copy import deepcopy
+import io
 import json
 import os
 from pathlib import Path
@@ -89,6 +90,22 @@ class FeedCollectionTests(unittest.TestCase):
         self.assertEqual(parsed['unfinished'],1)
         self.assertEqual(len(parsed['observations']),1)
 
+    def test_exact_26_hour_completion_and_offset_timestamp_are_normalized(self):
+        parsed = parse_candles(payload(candle('2026-09-10')) | {
+            'candles': [{'instrumentId': 1, 'candles': [
+                {**candle('2026-09-10'), 'fromDate': '2026-09-10T23:00:00-01:00'}
+            ]}]
+        }, 1, '2026-09-12T02:00:00Z')
+        self.assertEqual(parsed['unfinished'], 0)
+        self.assertEqual(parsed['observations'][0]['date'], '2026-09-11')
+        self.assertEqual(parsed['observations'][0]['timestamp'], '2026-09-11T00:00:00Z')
+
+    def test_extreme_timestamp_completion_does_not_overflow(self):
+        parsed = parse_candles(payload({**candle('0001-01-01'), 'fromDate': '0001-01-01T00:00:00Z'}),
+                               1, '9999-12-31T23:59:59Z')
+        self.assertEqual(parsed['unfinished'], 0)
+        self.assertEqual(parsed['observations'][0]['date'], '0001-01-01')
+
     def test_duplicates_deduplicated_conflicts_fail(self):
         self.assertEqual(parse_candles(payload(candle(),candle()),1,NOW)['duplicates'],1)
         with self.assertRaisesRegex(CollectionError,'conflicting-candles'):
@@ -100,6 +117,18 @@ class FeedCollectionTests(unittest.TestCase):
             if mutation=='id':p['candles'][0]['instrumentId']=2
             else:p['interval']='OneMinute'
             with self.assertRaises(CollectionError): parse_candles(p,1,NOW)
+
+    def test_boolean_instrument_ids_rejected(self):
+        p = payload(candle())
+        p['candles'][0]['instrumentId'] = True
+        with self.assertRaisesRegex(CollectionError, 'candle-instrument-mismatch'):
+            parse_candles(p, 1, NOW)
+        p = payload(candle())
+        p['candles'][0]['candles'][0]['instrumentID'] = True
+        with self.assertRaisesRegex(CollectionError, 'candle-instrument-mismatch'):
+            parse_candles(p, 1, NOW)
+        with self.assertRaisesRegex(CollectionError, 'candle-instrument-mismatch'):
+            parse_candles(payload(candle()), True, NOW)
 
     def test_missing_weekdays_not_asserted_exchange_sessions(self):
         parsed=parse_candles(payload(candle('2026-09-07'),candle('2026-09-10')),1,NOW)
@@ -124,8 +153,8 @@ class FeedCollectionTests(unittest.TestCase):
         self.assertEqual(len(reader.calls),3)
         self.assertFalse(result['instruments'][1]['pricesRetained'])
 
-    def test_authentication_entitlement_and_rate_stop(self):
-        for reason in ['authentication-failed','entitlement-failed','rate-limit-stop']:
+    def test_authentication_forbidden_and_rate_stop(self):
+        for reason in ['authentication-failed','http-forbidden-cause-unresolved','rate-limit-stop']:
             reader=FakeReader({'SPY':reason})
             result=collect(reader,retrieved_at=NOW,probe_only=True)
             self.assertEqual(len(reader.calls),1)
@@ -155,6 +184,15 @@ class FeedCollectionTests(unittest.TestCase):
             self.assertEqual(changed['revisedDates'],['2026-09-10'])
             old=json.loads((root/('SPY-'+first['version']+'.json')).read_text())
             self.assertEqual(old['observations'][0]['close'],100)
+
+    def test_persist_extreme_timestamp_does_not_overflow_completion_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            observation=rows()[0]
+            observation.update({'date':'9999-12-31','timestamp':'9999-12-31T23:00:00Z'})
+            with self.assertRaisesRegex(CollectionError,'unfinished-observation'):
+                persist_version(Path(tmp),symbol='SPY',observations=[observation],interpretation=MEANING,
+                                retention={**POLICY,'expiresAt':'9999-12-31T23:59:59Z'},
+                                retrieved_at='9999-12-31T23:59:58Z')
 
     def test_source_mismatch_rejected_before_write(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,6 +239,77 @@ class FeedCollectionTests(unittest.TestCase):
             with patch.object(reader._opener,'open',side_effect=urllib.error.HTTPError('private',401,'secret-body',{},None)):
                 with self.assertRaisesRegex(CollectionError,'^authentication-failed$'):reader.get('/market-data/search')
             with self.assertRaisesRegex(CollectionError,'collection-stopped'):reader.get('/market-data/search')
+
+    def test_forbidden_signature_is_classified_without_exposing_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            reader=EtoroReader(path)
+            body=json.dumps({'title':'Error 1010: Access denied',
+                             'detail':"The site owner has blocked access based on your browser's signature."}).encode()
+            error=urllib.error.HTTPError('synthetic',403,'Forbidden',{},io.BytesIO(body))
+            with patch.object(reader._opener,'open',side_effect=error):
+                with self.assertRaisesRegex(CollectionError,'^cloudflare-browser-signature-block$'):
+                    reader.get('/market-data/search')
+            self.assertTrue(reader._stopped)
+
+    def test_other_forbidden_envelopes_are_unresolved_and_stop(self):
+        cases = [
+            b'{"title":"other","detail":"different"}',
+            b'{not-json',
+            b'{"title":"Error 1010: Access denied","title":"duplicate","detail":"The site owner has blocked access based on your browser\'s signature."}',
+            b'{"title":"Error 1010: Access denied","detail":"The site owner has blocked access based on your browser\'s signature.","extra":"synthetic"}',
+            b'x' * (16 * 1024 + 1),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            for body in cases:
+                with self.subTest(body_class=len(body)):
+                    reader=EtoroReader(path)
+                    error=urllib.error.HTTPError('synthetic',403,'Forbidden',{},io.BytesIO(body))
+                    with patch.object(reader._opener,'open',side_effect=error):
+                        with self.assertRaisesRegex(CollectionError,'^http-forbidden-cause-unresolved$'):
+                            reader.get('/market-data/search')
+                    with self.assertRaisesRegex(CollectionError,'collection-stopped'):
+                        reader.get('/market-data/search')
+
+    def test_forbidden_body_read_error_is_unresolved_and_stops(self):
+        class ReadFailingHTTPError(urllib.error.HTTPError):
+            def read(self, amount=None):
+                raise OSError('synthetic-read-failure')
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            reader=EtoroReader(path)
+            error=ReadFailingHTTPError('synthetic',403,'Forbidden',{},io.BytesIO())
+            with patch.object(reader._opener,'open',side_effect=error):
+                with self.assertRaisesRegex(CollectionError,'^http-forbidden-cause-unresolved$'):
+                    reader.get('/market-data/search')
+            with self.assertRaisesRegex(CollectionError,'collection-stopped'):
+                reader.get('/market-data/search')
+
+    def test_http_close_error_still_returns_controlled_classification(self):
+        class CloseFailingHTTPError(urllib.error.HTTPError):
+            def close(self):
+                raise OSError('synthetic-close-failure')
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            reader=EtoroReader(path)
+            error=CloseFailingHTTPError('synthetic',403,'Forbidden',{},io.BytesIO(b'{}'))
+            with patch.object(reader._opener,'open',side_effect=error):
+                with self.assertRaisesRegex(CollectionError,'^http-forbidden-cause-unresolved$'):
+                    reader.get('/market-data/search')
+
+    def test_other_http_status_codes_remain_separate(self):
+        cases=[(401,'authentication-failed',True),(404,'instrument-unavailable',False),(429,'rate-limit-stop',True)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            for status, expected, stopped in cases:
+                with self.subTest(status=status):
+                    reader=EtoroReader(path)
+                    error=urllib.error.HTTPError('synthetic',status,'synthetic',{},io.BytesIO(b'not-inspected'))
+                    with patch.object(reader._opener,'open',side_effect=error):
+                        with self.assertRaisesRegex(CollectionError,'^'+expected+'$'):
+                            reader.get('/market-data/search')
+                    self.assertEqual(reader._stopped,stopped)
 
     def test_profile_key_families_map_to_correct_headers_without_rewrite(self):
         profiles = (
@@ -288,6 +397,20 @@ class FeedCollectionTests(unittest.TestCase):
                        interpretations={'SPY':reviewed},output_root=Path('/unused'))
         self.assertEqual(len(reader.calls),1)
         self.assertEqual(result['instruments'][0]['reason'],'resolved-instrument-differs-from-reviewed-mapping')
+
+    def test_ambiguous_and_boolean_search_instrument_ids_are_rejected(self):
+        reader=FakeReader()
+        reader.get=lambda path, query=None: {'items':[
+            {'instrumentId':1,'internalSymbolFull':'SPY','displayname':'SPDR S&P 500','instrumentType':'ETF','internalExchangeName':'NYSE'},
+            {'instrumentId':2,'internalSymbolFull':'SPY','displayname':'SPDR S&P 500','instrumentType':'ETF','internalExchangeName':'NYSE'},
+        ]}
+        with self.assertRaisesRegex(CollectionError,'ambiguous-instrument'):
+            resolve_instrument(reader,'SPY')
+        reader.get=lambda path, query=None: {'items':[
+            {'instrumentId':True,'internalSymbolFull':'SPY','displayname':'SPDR S&P 500','instrumentType':'ETF','internalExchangeName':'NYSE'},
+        ]}
+        with self.assertRaisesRegex(CollectionError,'instrument-identity-unverified'):
+            resolve_instrument(reader,'SPY')
 
     def test_process_crash_after_publication_remains_retryable(self):
         with tempfile.TemporaryDirectory() as tmp:

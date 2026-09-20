@@ -301,6 +301,13 @@ Updated: 2026-07-25
   private retention boundaries; `docs/reviews/continuous-research-v1.md` records
   the reviewed delivery checks.
 
+- `docs/incidents/provider-http-classification.md` for the corrected distinction
+  between a bounded Cloudflare 403 transport classification and unproven account
+  entitlement. API access authorization, transport acceptance, and model-use or
+  retention approval are separate gates. Collector timestamps normalize to UTC
+  without retaining the original provider offset/string, so no eToro semantic
+  portability finding is supported before future provenance.
+
 - `AGENTS.md` for hard safety rules and validation commands.
 - `docs/architecture.md` for Python module boundaries, allocation/risk,
   backtest, and ledger shape.
