@@ -145,9 +145,10 @@ urllib's default
 `Python-urllib/3.13` identifier before the Public API receives the request.
 The separately authorized collector therefore sends the fixed,
 non-browser `personal-research-client/1.0` User-Agent on its existing
-allowlisted GET requests. This is the provider's supported client identifier,
-not browser impersonation or a bypass. The `x-api-key`, `x-user-key`, and
-unique `x-request-id` headers remain the complete authentication pattern; an
+allowlisted GET requests. Per the supplied support guidance, this is the client
+identifier to use, not browser impersonation or a bypass. The `x-api-key`,
+`x-user-key`, and unique `x-request-id` headers remain the complete
+authentication pattern; an
 `Authorization: Bearer` header must not be added. A later JSON 401 or 403 is
 an application-authentication result rather than this documented edge block
 and must be escalated with that new request ID, without retaining header values

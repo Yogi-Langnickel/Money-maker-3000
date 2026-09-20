@@ -7,7 +7,7 @@ its support-escalation handle. The allowlisted paths, GET-only transport, TLS
 verification, disabled proxies, request budget, credential profile handling,
 retention gate, and model-use gate are unchanged.
 
-## Provider-confirmed transport fact
+## Account-holder-supplied eToro support guidance
 
 On 21 September 2026, the account holder supplied eToro support guidance that
 Cloudflare Error 1010 was a Browser Integrity Check rejection of urllib's
