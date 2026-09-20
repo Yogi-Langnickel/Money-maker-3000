@@ -30,6 +30,7 @@ DOCS_URL = "https://api-portal.etoro.com/api-reference/market-data/get-instrumen
 SYMBOLS = {"SPY": ("SPY", "USD", ("spdr", "s&p")), "QQQ": ("QQQ", "USD", ("invesco", "qqq")), "VAS": ("VAS.ASX", "AUD", ("vanguard", "australian"))}
 PRICE_FIELDS = ("open", "high", "low", "close", "volume")
 HTTP_ERROR_BODY_CAP = 16 * 1024
+ETORO_USER_AGENT = "personal-research-client/1.0"
 _CLOUDFLARE_BROWSER_SIGNATURE_TITLE = "Error 1010: Access denied"
 _CLOUDFLARE_BROWSER_SIGNATURE_DETAIL = "The site owner has blocked access based on your browser's signature."
 
@@ -321,6 +322,7 @@ class EtoroReader:
         self._last = 0.0
         self._stopped = False
         self.request_count = 0
+        self.last_request_id: str | None = None
 
     def get(self, path: str, query: dict | None = None) -> dict:
         if self._stopped:
@@ -338,7 +340,8 @@ class EtoroReader:
         url = "https://public-api.etoro.com/api/v1" + path
         if query:
             url += "?" + urllib.parse.urlencode(query)
-        headers = {"x-api-key": self._credentials["ETORO_API_KEY"], "x-user-key": self._credentials["ETORO_USER_KEY"], "x-request-id": str(uuid.uuid4()), "Accept": "application/json"}
+        self.last_request_id = str(uuid.uuid4())
+        headers = {"x-api-key": self._credentials["ETORO_API_KEY"], "x-user-key": self._credentials["ETORO_USER_KEY"], "x-request-id": self.last_request_id, "Accept": "application/json", "User-Agent": ETORO_USER_AGENT}
         self._last = time.monotonic()
         self.request_count += 1
         try:

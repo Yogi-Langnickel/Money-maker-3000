@@ -329,6 +329,19 @@ class FeedCollectionTests(unittest.TestCase):
                 self.assertEqual(headers['X-user-key'],'synthetic-user')
                 self.assertEqual(path.read_text(),profile)
 
+    def test_reader_sets_support_confirmed_user_agent_with_required_header_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            reader=EtoroReader(path)
+            with patch.object(reader._opener,'open',side_effect=urllib.error.HTTPError('synthetic',401,'',{},None)) as opened:
+                with self.assertRaisesRegex(CollectionError,'^authentication-failed$'):
+                    reader.get('/market-data/search')
+            headers=dict(opened.call_args.args[0].header_items())
+            self.assertEqual(headers['User-agent'],'personal-research-client/1.0')
+            self.assertTrue({'X-api-key','X-user-key','X-request-id','Accept','User-agent'}.issubset(headers))
+            self.assertNotIn('Authorization',headers)
+            self.assertEqual(reader.last_request_id,headers['X-request-id'])
+
     def test_profile_duplicate_missing_and_mixed_families_fail_before_transport(self):
         canonical=['ETORO_API_KEY=synthetic-public','ETORO_USER_KEY=synthetic-user']
         legacy=['ETORO_AGENT_PUBLIC_KEY=synthetic-public','ETORO_AGENT_PRIVAT_KEY=synthetic-user']

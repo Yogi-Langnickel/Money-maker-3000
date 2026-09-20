@@ -27,12 +27,19 @@ classification.
 
 ## Scope and follow-up
 
-This fixes observability, not provider access. It does not bypass Cloudflare,
-alter client identity, retry credentials, or make any live request. eToro must
-identify the applicable API/security configuration if the access issue is to be
-resolved. Any later successful retrieval still needs separate instrument,
-session, price-basis, adjustment, cost, model-use, and retention evidence before
-research use or portability can be assessed.
+eToro support later confirmed that the edge rule rejected urllib's default
+`Python-urllib/3.13` User-Agent before the Public API processed the request.
+The collector now uses eToro's supplied, fixed `personal-research-client/1.0`
+identifier on its existing read-only allowlisted GET requests. It does not
+impersonate a browser, alter credentials, add a Bearer token, or make a live
+request as part of this correction. The existing `x-api-key`, `x-user-key`, and
+per-request `x-request-id` headers remain required. A future JSON 401 or 403
+is distinct from Error 1010 and must be escalated to eToro with a new request
+ID. The collector exposes that current request ID only as in-memory
+`last_request_id`; header values and payloads remain unretained. Any later successful
+retrieval still needs separate instrument, session, price-basis, adjustment,
+cost, model-use, and retention evidence before research use or portability can
+be assessed.
 
 ## Sources
 
