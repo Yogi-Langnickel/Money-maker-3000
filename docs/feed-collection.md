@@ -132,18 +132,29 @@ instrument availability still require a successful request; an older HTTP 401
 is not a current result. No eToro prices were retained and no eToro model trained
 by that attempt.
 
-After the compatibility patch passed both persona review iterations, the
-authorized metadata-only probe on 2026-09-14 made one SPY instrument-search GET.
-HTTP 403 produced the controlled `entitlement-failed` code; QQQ and VAS were
-`collection-stopped`, with no further requests. The code describes the response
-handling, not a verified account or licensing diagnosis. Key scope, IP/access
-policy, or an intermediary such as a WAF remain possible unresolved causes.
-A bounded follow-up diagnostic found `cloudflare` and `access denied` markers
-in the JSON response and a CF-Ray header, with no WWW-Authenticate header. This
-supports an edge-access response interpretation; it does not establish why access
-was denied. Raw response text and header identifiers were not retained here.
-Instrument availability was not verified. No prices or account data were requested
-or retained, and the separate model-training gate remains unchanged.
+The initial authorized metadata-only SPY search on 2026-09-14 reached a
+Cloudflare 1010 edge block. The account holder later supplied eToro support
+guidance that identified urllib's default User-Agent as the edge-triggering
+client signature. A later metadata-only request with the fixed non-browser
+User-Agent and the existing API-key/user-key/request-ID authentication pattern
+reached HTTP 200.
+
+That runtime observation did not establish a usable instrument mapping.
+Explicitly projecting `instrumentId` produced a duplicate JSON key, so the
+collector now omits only that redundant projection; the field is still returned
+by the search response. The corrected search produced a unique SPY match with
+an ID, display name, and exchange, but no `instrumentType`. The official
+[search schema](https://api-portal.etoro.com/api-reference/market-data/search-for-instruments)
+documents `instrumentType` as a string in the response schema. The missing
+runtime field is therefore an unresolved documentation/runtime discrepancy, not
+evidence that the instrument is an ETF. The collector remains fail-closed at
+`instrument-type-or-exchange-unverified` and does not infer a type from name or
+exchange.
+
+This was metadata-only: no request IDs, raw data, price history, or account data
+were retained. It does not establish rights for retention or model use, research
+data suitability, prediction, or source portability. The separate model-training
+gate remains unchanged.
 
 Focused synthetic tests cover nullable fields, malformed ranges/numbers,
 uncompleted candles, duplicates/conflicts, source mismatch, rights expiry,
