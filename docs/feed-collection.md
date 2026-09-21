@@ -156,6 +156,22 @@ were retained. It does not establish rights for retention or model use, research
 data suitability, prediction, or source portability. The separate model-training
 gate remains unchanged.
 
+A later account-holder-supplied sanitized exploration extended only the
+non-retained transport/parser evidence. Type-field search variants still yielded
+an exact SPY match with ID, display name, and exchange but omitted both text and
+numeric type fields. The daily `OneDay/1` response exposed OHLCV fields. The
+daily `OneDay/1000` response contained 1,000 candles: the strict parser accepted
+999 complete rows dated 2022-08-22 through 2026-09-18, excluded one unfinished
+current candle, and found zero duplicates. OHLC fields were numeric; volume was
+null in 188 rows dated 2022-08-22 through 2023-05-19. No field values, payload,
+or request ID was retained.
+
+This evidence does not settle timestamp meaning, exchange-session boundaries,
+close or price basis, corporate-action adjustment, or costs. It does not resolve
+the missing documented type fields or make semantic intake, retention, research,
+prediction, or portability eligible. The existing type, rights, and model-use
+gates remain fail-closed.
+
 Focused synthetic tests cover nullable fields, malformed ranges/numbers,
 uncompleted candles, duplicates/conflicts, source mismatch, rights expiry,
 revision preservation, replay, interrupted publication, corrupted prior evidence,

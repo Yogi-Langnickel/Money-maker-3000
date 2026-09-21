@@ -165,9 +165,15 @@ an instrument ID, display name, and exchange. The response did not provide
 `instrumentType`, so the collector correctly stopped with
 `instrument-type-or-exchange-unverified`; it does not infer a type from the
 other fields. The collector therefore omits only the redundant requested field
-and keeps its duplicate-key parser and identity/type checks strict. This was a
-metadata-only observation: no price history was retained, and it supports no
-predictive or portability claim.
+and keeps its duplicate-key parser and identity/type checks strict. A later
+sanitized, non-retained exploration found that type-field search variants still
+omitted both type fields, while daily `OneDay/1` exposed OHLCV and
+`OneDay/1000` returned 1,000 candles. The strict parser accepted 999 completed
+rows from 2022-08-22 through 2026-09-18, excluded one unfinished current candle,
+and found no duplicates; OHLC was numeric and volume was null in 188 rows from
+2022-08-22 through 2023-05-19. No values or payload were retained. Timestamp,
+session, price basis, adjustment, and cost semantics remain unresolved, so this
+supports no retention, research, predictive, or portability claim.
 
 The eToro terms/model-use and retention evidence remains a separate fail-closed
 requirement before observations, derived models, or mixed reports are retained

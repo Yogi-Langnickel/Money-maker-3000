@@ -20,6 +20,18 @@ unresolved. The collector stays fail-closed at
 history or price data was retained, and this metadata observation provides no
 research, predictive, or portability proof.
 
+A separate sanitized, non-retained market-data exploration establishes only
+transport and parser shape. Search type-field variants continued to return an
+exact SPY match with ID, display name, and exchange while omitting both text and
+numeric type fields. A `OneDay/1` candle response exposed OHLCV fields. A
+`OneDay/1000` response contained 1,000 candles; the strict parser accepted 999
+complete rows from 2022-08-22 through 2026-09-18, excluded one unfinished
+current candle, and found no duplicates. OHLC values were numeric; volume was
+null in 188 rows from 2022-08-22 through 2023-05-19. Timestamps, session and
+close conventions, price basis, corporate-action adjustments, and costs remain
+unresolved. No values or payload were retained, and this does not make the feed
+eligible for retention, research, prediction, or portability.
+
 Separately, this workflow conservatively applies Part V 1.7's model-training
 restriction to its probability fitting and retains the written model-use evidence
 gate. Ordinary personal API use and storage within Permitted Use are not subject
