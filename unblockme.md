@@ -1,73 +1,65 @@
-# Money-maker-3000 Unblock Notes
+# Money-maker-3000 research unblock record
 
-Status: non-blocking for Python historical market-data/backtest implementation
-Created: 2026-05-15
-Updated: 2026-05-31
+Updated: 2026-09-21
 
-Simulation and historical market-data/backtest work can continue locally. These
-items block account-linked provider state, reconciliation persistence, or any
-execution capability. Review ownership remains the only open Git Flow decision.
+Money Maker remains simulation-only. Provider data cannot create an order
+intent, and demo/live execution, account reads, credentials in evidence, and
+provider mutation remain disabled.
 
-## Git Flow
+## Resolved
 
-- `origin` is configured at `https://github.com/Yogi-Langnickel/Money-maker-3000.git`.
-- `develop` tracks `origin/develop` and should remain the integration branch.
-- Use scoped feature branches from `develop` for new PR/review work.
+- The earlier Cloudflare 1010 edge block has a documented transport path: the
+  account holder supplied eToro support guidance, and the fixed non-browser
+  User-Agent reached HTTP 200 for a metadata-only request.
+- A sanitized, non-retained structural exploration established that instrument
+  search can return the exact SPY match, identifier, display name, and exchange,
+  and that the daily endpoint exposes OHLCV-shaped candles. It did not retain
+  values, payloads, request identifiers, prices, or account data.
 
-Unblock questions:
+## Active eToro research blockers
 
-1. Who should review simulation contract changes before merge?
+- The [official search schema](https://api-portal.etoro.com/api-reference/market-data/search-for-instruments)
+  documents `instrumentType` and `instrumentTypeID`, but both were absent in
+  the runtime type-field variants. The collector must not infer ETF status from
+  name or exchange, so semantic intake remains fail-closed.
+- Instrument identity, listing currency, timestamps, session boundaries, close
+  or price basis, corporate-action adjustments, and cost treatment remain
+  unresolved.
+- The available daily response is capped at the latest 1,000 observations; it
+  has no documented date cursor. It does not yet establish the reserved history
+  needed for a portability evaluation.
+- The separate retention and model-use evidence gate remains closed. A
+  successful metadata or candle response does not authorize storage, research,
+  model fitting, or source portability.
 
-## Provider And Performance Inputs
+## FMP and Kibot
 
-- Historical market-data inputs are the first approved provider-adjacent
-  direction. Start there before portfolio state or reconciliation records.
-- Use historical data to improve deterministic diagnostics for selected
-  instruments. Backtest output must remain diagnostics only.
-- Portfolio state and reconciliation records can be designed against an EC2
-  worker plus DynamoDB storage boundary, but implementation remains blocked
-  until the table schema, IAM role, and retention job are added.
-- The eToro Dashboard should not durably store account-linked data. Dashboard
-  reads may use live provider data and short in-memory server cache/backoff
-  metadata only.
-- Do not add credentials, demo execution, live execution, account-linked
-  durable storage, real PnL, win-rate, drawdown, Sharpe ratio, profitability, or
-  execution-quality reporting until separate review gates approve the inputs and
-  storage boundary.
-- Demo execution remains disabled. Planning inputs are recorded: USD 10,000
-  demo bot allocation, USD 500 maximum order size, 20 maximum open positions,
-  10% maximum daily drawdown, 25% maximum weekly drawdown, and user-selected
-  instruments subject to allowlist/risk gates.
-- Future demo design should start with limit orders only and mandatory order
-  preview before submit. Market orders should stay disabled until slippage
-  controls and reconciliation prove reliable.
+Their comparison is retrospective robustness evidence, not independent
+predictive confirmation. The current portability verdict remains inconclusive.
+Current source and retention attestations must be checked before any private
+FMP/Kibot artifact is read, replayed, refreshed, or reused.
 
-See `docs/provider-boundary-decisions.md` for the current provider/storage
-ordering and the exact meaning of demo execution approval.
+## Forward journal
 
-First historical-data implementation boundary:
+The forward journal contains pending evidence only. It is not a predictive
+result until genuinely later approved observations mature and are scored; no
+pending entry supports a profitability or improvement claim.
 
-- Start offline-fixture-first, not with live eToro fetch code.
-- Use small public daily OHLCV fixtures under
-  `tests/fixtures/market_history/` when committed.
-- Current committed public-test fixtures cover `SPY` and `GLD`; expand the
-  fixture universe only with small public, account-free OHLCV rows.
-- Current historical backtest output includes period diagnostics for `24h`,
-  `1w`, `1m`, `1y`, `5y`, and `max` as market context only.
-- Keep larger generated downloads under ignored
-  `data/private/market-history/`.
-- Start with `SPY`/`GLD` style ETF or equity symbols that already fit the
-  simulation contract.
-- Fixture rows may contain symbol, date, open, high, low, close, volume, and
-  public source metadata only.
-- Do not include account ids, balances, holdings, position ids, order ids,
-  transaction history, provider user keys, raw account payloads, or screenshots.
+## Safe next actions
 
-Remaining unblock questions:
+1. Ask eToro to explain why its documented type fields are absent at runtime and
+   identify the supported read-only way to verify type, currency, session, and
+   price semantics. Do not provide credentials, request IDs, or raw payloads.
+2. Obtain reviewed written evidence for eToro retention and model use before
+   retaining any observations or derived artifacts.
+3. Obtain source documentation for timestamp, session, price basis, adjustment,
+   and cost treatment before declaring eToro compatible with another feed.
+4. Before FMP/Kibot reuse or refresh, verify the applicable active subscription
+   and retention attestations, then preserve a new immutable, dated input
+   version rather than overwriting prior evidence.
+5. Score the forward journal only when new approved observations have arrived;
+   keep source-pair evaluation frozen and do not retune for a target source.
 
-1. Should the DynamoDB account-linked audit retention defaults be accepted as:
-   7 years for orders/risk/reconciliation, 90 days detailed portfolio snapshots
-   compacted to daily summaries, and no default raw provider payload storage?
-1. Which initial instrument allowlist should the user-selectable instrument
-   field offer for demo planning?
-1. Who should review simulation contract changes before merge?
+See [continuous research status](docs/continuous-research-goal-status.md) and
+[feed collection evidence](docs/feed-collection.md) for the detailed evidence
+and limits.
