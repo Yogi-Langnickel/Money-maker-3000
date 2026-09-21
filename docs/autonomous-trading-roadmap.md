@@ -11,8 +11,14 @@ authorization at that stage.
 ## Evidence standard
 
 A 70–80% hit rate is an aspirational research target, not a release criterion,
-profitability claim, or authorization to trade. A release decision must instead
-consider all of the following:
+profitability claim, or authorization to trade. A raw 70–80% result never
+passes a promotion gate. Before evaluation, the reviewed protocol must
+pre-register the precise outcome and horizon, instrument universe, abstention
+treatment, minimum effective sample, a moving-block bootstrap with blocks of at
+least five observations for overlapping five-observation outcomes, and promotion
+threshold. Promotion requires the one-sided 95% lower confidence bound,
+calculated by that pre-registered method, to exceed the pre-registered threshold.
+A release decision must also consider:
 
 - prospective, out-of-sample evidence on genuinely later observations;
 - expected net result after documented costs and slippage assumptions;
@@ -23,6 +29,11 @@ Offline refinement may generate candidate strategies. The active execution
 version remains frozen throughout an evaluation period, and a candidate can be
 promoted only through an auditable reviewed gate that records the evidence,
 parameters, allocation limit, risk policy, and approval.
+
+A tested operator kill switch is required before any execution stage, including
+the demo pilot. It must stop new execution immediately and require an explicit
+reviewed re-enable decision; testing must demonstrate both effects before the
+stage can proceed.
 
 ## Staged path
 
@@ -35,15 +46,16 @@ parameters, allocation limit, risk policy, and approval.
    genuinely later approved observations mature.
 3. **Approved demo pilot.** After explicit authorization, operate only against
    a designated demo environment with a bounded allocation, documented costs,
-   loss/drawdown caps, reconciliation, and a reviewed rollback plan.
+   loss/drawdown caps, reconciliation, a tested operator kill switch, and a
+   reviewed rollback plan.
 4. **Explicit real-capital pilot.** After a separate explicit authorization,
    use a small dedicated real allocation with fixed strategy and risk versions,
-   predeclared loss limits, reconciliation, monitoring, and immediate rollback
-   criteria.
+   predeclared loss limits, reconciliation, monitoring, the tested kill switch,
+   and immediate rollback criteria.
 5. **Monitored autonomous operation.** Expand only after pilot evidence and a
    new reviewed authorization. Keep allocation bounds, data freshness checks,
    reconciliation, an append-only evidence ledger, alerts, and an operator kill
-   switch active. A kill switch must stop new execution immediately and require
+   switch active and tested. It must stop new execution immediately and require
    an explicit reviewed re-enable decision.
 
 No stage may claim that historical or cross-provider agreement proves
