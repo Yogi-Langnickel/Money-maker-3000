@@ -35,9 +35,13 @@ provider mutation remain disabled.
 ## FMP and Kibot
 
 Their comparison is retrospective robustness evidence, not independent
-predictive confirmation. The current portability verdict remains inconclusive.
-Current source and retention attestations must be checked before any private
-FMP/Kibot artifact is read, replayed, refreshed, or reused.
+predictive confirmation. The current portability verdict remains inconclusive:
+FMP adjustment, price-type, session, and timestamp semantics remain unresolved;
+the volatility strategy breaches its frozen trigger-agreement tolerance; and the
+supplied early-close and corporate-action cases are not a complete calendar.
+See [strategy portability](docs/strategy-portability.md). Current source and
+retention attestations must be checked before any private FMP/Kibot artifact is
+read, replayed, refreshed, or reused.
 
 ## Forward journal
 
