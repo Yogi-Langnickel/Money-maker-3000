@@ -6,6 +6,14 @@ and a short configured workflow. Simulation and execution boundaries remain
 unchanged. Historical scoring tests are labelled synthetic contract or
 retrospective evidence; pending forecasts are not improvement evidence.
 
+Simulation-only is the current development phase. The eventual product goal is
+autonomous operation with a dedicated, bounded allocation, subject to explicit
+go-live authorization and the evidence and risk gates in the
+[autonomous trading roadmap](autonomous-trading-roadmap.md). No demo/live
+execution or account access is authorized or implemented now. Offline strategy
+refinement may generate candidates, but the active execution version must stay
+frozen; any promotion requires an auditable reviewed gate.
+
 The real eToro acquisition and first eToro forward predictions remain externally
 blocked. The account holder supplied eToro support guidance for the earlier
 Cloudflare 1010 edge block, and a later metadata-only request using the fixed

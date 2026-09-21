@@ -1,10 +1,18 @@
 # Money-maker-3000 research unblock record
 
-Updated: 2026-09-21
+Updated: 2026-09-22
 
 Money Maker remains simulation-only. Provider data cannot create an order
 intent, and demo/live execution, account reads, credentials in evidence, and
 provider mutation remain disabled.
+
+## Development phase and future product direction
+
+Simulation-only is the current development phase. The eventual product goal is
+autonomous operation using a dedicated, bounded allocation, but it requires a
+separate explicit go-live authorization after the roadmap gates are met. No
+demo or live execution, account access, or allocation has been authorized or
+implemented now. See the [autonomous trading roadmap](docs/autonomous-trading-roadmap.md).
 
 ## Resolved
 
