@@ -64,9 +64,14 @@ Observed-attested local candles additionally require the established source
 retention/model-use and instrument-interpretation gates before evaluation.
 
 `profit-hypothesis-replay` is a read-only replay: it accepts the saved report
-and exact local config, revalidates report/dataset/rule identity, recomputes the
-trial ledger and equity curve, and fails on any mismatch. It is distinct from a
-cross-instrument retest.
+and exact local config plus the evidence root, validates the canonical stored
+report, frozen rules, ledger and equity artifacts before recomputing, and fails
+on any mismatch. It is distinct from a cross-instrument retest.
+
+Observed-attested regular-session candles reject definite Saturday/Sunday
+incompatibility for the declared US/AU regular session. Holidays are not guessed:
+the report remains calendar-unverified unless source calendar evidence supports
+them. Synthetic fixtures are explicitly exempt from exchange-calendar validation.
 
 ## Invocation
 

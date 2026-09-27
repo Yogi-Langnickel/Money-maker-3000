@@ -124,7 +124,11 @@ class ProfitHypothesisTests(unittest.TestCase):
             second = P.run(config(), evidence_root=Path(root), allow_synthetic_smoke=True)
             self.assertEqual(first["sha256"], second["sha256"])
             self.assertTrue((Path(root) / first["sha256"] / "report.json").exists())
-            self.assertEqual(P.replay(first, config(), allow_synthetic_smoke=True)["replay"], "verified")
+            self.assertEqual(P.replay(first, config(), evidence_root=Path(root), allow_synthetic_smoke=True)["replay"], "verified")
+            ledger = Path(root) / first["sha256"] / "trial-0-ledger.json"
+            ledger.write_text('{"simulated":true,"trades":[]}', encoding="utf-8")
+            with self.assertRaisesRegex(P.HypothesisError, "replay-artifact"):
+                P.replay(first, config(), evidence_root=Path(root), allow_synthetic_smoke=True)
             changed = config(); changed["costBps"] = 11
             second_config = P.run(changed, evidence_root=Path(root), allow_synthetic_smoke=True)
             self.assertEqual(second_config["frozen"]["selectionAccounting"]["retainedAttemptCount"], 2)
@@ -151,6 +155,31 @@ class ProfitHypothesisTests(unittest.TestCase):
         observed = config(); observed["classification"] = "observed-attested"
         with self.assertRaisesRegex(Exception, "observed-source-unapproved"):
             P.run(observed)
+
+    def test_observed_shared_gate_failure_persists_and_weekend_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            denied = config(); denied["classification"] = "observed-attested"
+            denied["instrument"] = {**denied["instrument"], "source": "fmp-eod"}
+            for series in denied["datasets"].values():
+                for candle in series:
+                    candle["provenance"]["source"] = "fmp-eod"
+            denied["retention"] = {"policy": R.FMP_POLICY, "subscriptionStatus": "expired", "terminationDate": None}
+            with self.assertRaisesRegex(P.HypothesisError, "observed-gate-rejected"):
+                P.run(denied, evidence_root=Path(root))
+            failed = list(Path(root).glob("*/failed-run.json"))
+            self.assertEqual(len(failed), 1)
+        weekend = config(); weekend["classification"] = "observed-attested"
+        weekend["instrument"] = {**weekend["instrument"], "source": "fmp-eod"}
+        weekend["retention"] = {"policy": R.FMP_POLICY, "subscriptionStatus": "active", "terminationDate": None}
+        weekend["interpretation"] = {"instrumentVerified": True, "trainingPermitted": True, "currency": "USD", "session": "US-equities-regular", "timestampMeaning": "source-close", "priceType": "ohlcv", "adjustments": "unadjusted", "costs": "modeled", "evidence": "source calendar not supplied"}
+        for series in weekend["datasets"].values():
+            for candle in series:
+                for key in ("start", "end", "availableAt"):
+                    candle[key] = (datetime.fromisoformat(candle[key].replace("Z", "+00:00")) + timedelta(days=5)).isoformat().replace("+00:00", "Z")
+                candle["provenance"]["retrievedAt"] = (datetime.fromisoformat(candle["provenance"]["retrievedAt"].replace("Z", "+00:00")) + timedelta(days=5)).isoformat().replace("+00:00", "Z")
+                candle["provenance"]["source"] = "fmp-eod"
+        with self.assertRaisesRegex(P.HypothesisError, "regular-session-weekend"):
+            P.run(weekend)
 
     def test_successor_provenance_drops_only_successor_toolkit_context(self):
         predecessor = {"protocolId": "new", "frozenAt": "new", "retention": {}, "interpretation": {},

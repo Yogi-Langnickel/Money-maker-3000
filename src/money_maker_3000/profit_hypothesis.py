@@ -19,6 +19,7 @@ from typing import Any
 
 from . import signal_toolkit as S
 from . import research_cycle as R
+from . import learning as L
 
 VERSION = "instrument-profit-hypothesis.v1"
 ALLOWED_INTERVALS = ("1h", "4h", "1d", "1w")
@@ -109,6 +110,8 @@ def validate_dataset(config: dict[str, Any]) -> dict[str, Any]:
             _require(previous_end is None or end > previous_end and current >= previous_end, "hypothesis-overlapping-or-unordered-candles")
             _require(previous_available is None or available >= previous_available, "hypothesis-nonmonotonic-availability")
             _require(row["provenance"]["source"] == instrument["source"] and row["provenance"]["rights"] == instrument["rights"] and row["provenance"]["adjustmentBasis"] == instrument["adjustmentBasis"], "hypothesis-provenance-mismatch")
+            if config.get("classification") == "observed-attested" and instrument["session"] in ("US-equities-regular", "AU-equities-regular"):
+                _require(current.weekday() < 5 and end.weekday() < 5, "hypothesis-regular-session-weekend-candle")
             previous_start, previous_end, previous_available = current, end, available
         starts.append(_time(normalized[0]["start"])); ends.append(_time(normalized[-1]["end"]))
         result[interval] = {"rows": normalized, "sha256": _digest(normalized), "count": len(normalized),
@@ -227,11 +230,14 @@ def _grade(result: dict[str, Any], benchmark: float, stability: list[float], sen
 
 class ArtifactStore:
     """Append-only content-addressed JSON artifacts with idempotent recovery."""
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, create: bool = True):
         self.root = root.resolve(strict=False)
         for parent in (self.root, *self.root.parents):
             _require(not parent.is_symlink(), "hypothesis-unsafe-evidence-directory")
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if create:
+            self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        else:
+            _require(self.root.exists(), "hypothesis-evidence-unavailable")
         info = self.root.stat()
         _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o700, "hypothesis-private-evidence-directory-required")
 
@@ -268,6 +274,21 @@ class ArtifactStore:
             os.close(lock)
         return {"name": name, "sha256": identity}
 
+    def get(self, name: str) -> dict[str, Any]:
+        _require(type(name) is str and name and "/" not in name, "hypothesis-unsafe-artifact")
+        lock = os.open(self.root / ".lock", os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH)
+            raw = self._read_exact(self.root / (name + ".json"), 8 * 1024 * 1024)
+        finally:
+            os.close(lock)
+        try:
+            value = json.loads(raw)
+            _require(type(value) is dict and _canonical(value) == raw, "hypothesis-artifact-integrity-mismatch")
+            return value
+        except (UnicodeError, ValueError):
+            raise HypothesisError("hypothesis-artifact-integrity-mismatch") from None
+
 
 def _aligned_signal_indices(dataset: dict[str, Any], primary: str) -> tuple[set[int], dict[str, int]]:
     """Allow a primary signal only when every higher timeframe was available then."""
@@ -286,25 +307,35 @@ def _aligned_signal_indices(dataset: dict[str, Any], primary: str) -> tuple[set[
     return allowed, evidence
 
 
+def _attempt_scope(config: Any) -> dict[str, Any]:
+    instrument = config.get("instrument") if type(config) is dict else None
+    datasets = config.get("datasets") if type(config) is dict else None
+    return {"instrument": instrument if type(instrument) is dict else None,
+            "datasetInputSha256": _digest(datasets) if type(datasets) is dict else None}
+
+
 def _failure_artifact(root: Path | None, config: Any, code: str) -> None:
     if root is not None:
-        ArtifactStore(root / ("failed-" + _digest({"config": _digest(config), "code": code}))).put("failed-run", {"version": VERSION, "status": "failed", "errorCode": code, "configSha256": _digest(config)})
+        scope = _attempt_scope(config)
+        ArtifactStore(root / ("failed-" + _digest({"config": _digest(config), "code": code}))).put("failed-run", {"version": VERSION, "status": "failed", "errorCode": code, "configSha256": _digest(config), "attemptScope": scope})
 
 
-def _attempt_count(root: Path | None, config_sha256: str) -> int:
+def _attempt_count(root: Path | None, config_sha256: str, scope: dict[str, Any]) -> int:
     if root is None or not root.exists():
         return 1
     identities = {config_sha256}
     for path in root.iterdir():
-        report = path / "report.json"
-        if not path.is_dir() or not report.exists():
+        if not path.is_dir():
             continue
         try:
-            payload = json.loads(report.read_bytes())
-            identity = payload["frozen"]["selectionAccounting"]["attemptConfigSha256"]
-            if type(identity) is str:
+            record = path / ("report.json" if (path / "report.json").exists() else "failed-run.json")
+            payload = json.loads(record.read_bytes())
+            accounting = payload.get("frozen", {}).get("selectionAccounting", {})
+            identity = accounting.get("attemptConfigSha256", payload.get("configSha256"))
+            retained_scope = accounting.get("attemptScope", payload.get("attemptScope"))
+            if retained_scope == scope and type(identity) is str:
                 identities.add(identity)
-        except (ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError):
             # A corrupt retained artifact cannot be evidence for an attempt.
             continue
     return len(identities)
@@ -325,8 +356,12 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
                      and config["interpretation"]["session"] == config["instrument"]["session"], "hypothesis-observed-instrument-or-rights-unapproved")
         _require(config.get("refinementRequested") is not True, "hypothesis-holdout-refinement-requires-fresh-evidence")
         dataset = validate_dataset(config); primary = config.get("primaryInterval")
-    except HypothesisError as exc:
-        _failure_artifact(evidence_root, config, str(exc)); raise
+    except (HypothesisError, L.LearningError) as exc:
+        code = str(exc) if isinstance(exc, HypothesisError) else "hypothesis-observed-gate-rejected"
+        _failure_artifact(evidence_root, config, code)
+        if isinstance(exc, HypothesisError):
+            raise
+        raise HypothesisError(code) from None
     if primary not in dataset["intervals"]:
         _failure_artifact(evidence_root, config, "hypothesis-primary-interval-missing"); raise HypothesisError("hypothesis-primary-interval-missing")
     if not dataset["overlap"]["usable"]:
@@ -355,27 +390,33 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
                        "benchmarkReturn": benchmark, "costSensitivityAtDoubleCost": sensitivity, "chronologicalStability": thirds,
                        "incrementalNetReturn": evaluation["netSimulatedReturn"] - (trials[0]["evaluation"]["netSimulatedReturn"] if trials else 0),
                        "uncertainty": {"tradeCount": evaluation["tradeCount"], "assessment": "insufficient-independent-trades" if evaluation["tradeCount"] < 10 else "dependent-chronological-sample"}, "grade": grade, "gradeReason": reason})
-    config_sha256 = _digest(config)
+    config_sha256, scope = _digest(config), _attempt_scope(config)
     frozen = {"version": VERSION, "instrument": config["instrument"], "primaryInterval": primary, "dataset": {key: {field: value[field] for field in ("sha256", "count", "coverage")} for key, value in dataset["intervals"].items()},
-              "overlap": dataset["overlap"], "timeframeAlignment": {"primary": primary, "roles": {name: ("primary" if name == primary else "higher-confirmation" if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary] else "lower-coverage-only") for name in dataset["intervals"]}, "eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptConfigSha256": config_sha256, "attemptedTrials": len(trials), "retainedAttemptCount": retained_attempt_count if retained_attempt_count is not None else _attempt_count(evidence_root, config_sha256), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
+              "overlap": dataset["overlap"], "timeframeAlignment": {"primary": primary, "roles": {name: ("primary" if name == primary else "higher-confirmation" if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary] else "lower-coverage-only") for name in dataset["intervals"]}, "eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptConfigSha256": config_sha256, "attemptScope": scope, "attemptedTrials": len(trials), "retainedAttemptCount": retained_attempt_count if retained_attempt_count is not None else _attempt_count(evidence_root, config_sha256, scope), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
     _require(report_metadata is None or type(report_metadata) is dict and set(report_metadata) == {"frozenRuleRetest", "originalReportSha256"}
              and report_metadata["frozenRuleRetest"] is True and type(report_metadata["originalReportSha256"]) is str
              and len(report_metadata["originalReportSha256"]) == 64 and all(char in "0123456789abcdef" for char in report_metadata["originalReportSha256"]),
              "hypothesis-invalid-report-metadata")
-    report = {"version": VERSION, "simulated": True, "operationalStatus": "offline-research-complete", "validationStage": "untouched-chronological-evaluation", "frozen": frozen,
-              "trials": trials, "limitation": "Synthetic fixtures prove mechanics only; no empirical profitability has been demonstrated." if config["classification"] == "synthetic" else "Observed-attested local data still does not establish future profitability.",
+    artifacts = [{"name": "frozen-hypothesis", "sha256": _digest(frozen)}]
+    for index, trial in enumerate(trials):
+        artifacts.extend([{"name": "trial-%d-ledger" % index, "sha256": _digest({"simulated": True, "trades": trial["evaluation"]["tradeLedger"]})}, {"name": "trial-%d-equity" % index, "sha256": _digest({"simulated": True, "equity": trial["evaluation"]["equityCurve"]})}])
+    artifacts.append({"name": "report", "sha256": "self"})
+    observed = config["classification"] == "observed-attested"
+    report = {"version": VERSION, "simulated": True, "operationalStatus": "offline-research-session-calendar-unverified" if observed else "offline-research-complete", "validationStage": "untouched-chronological-evaluation-session-calendar-unverified" if observed else "untouched-chronological-evaluation", "frozen": frozen, "artifactManifest": artifacts,
+              "trials": trials, "limitation": "Synthetic fixtures prove mechanics only; no empirical profitability has been demonstrated; synthetic session dates are exempt from exchange-calendar validation." if config["classification"] == "synthetic" else "Observed-attested local data still does not establish future profitability; weekday compatibility is checked but exchange holidays require source calendar evidence.",
               "boundary": {"providerCalls": "blocked", "executionRoutes": "absent", "longOnly": True, "leverage": 1, "profitPromise": "absent"}}
     if report_metadata is not None:
         report.update(report_metadata)
     report["sha256"] = _digest(report)
     if evidence_root is not None:
         store = ArtifactStore(evidence_root / report["sha256"])
-        artifacts = [store.put("frozen-hypothesis", frozen)]
+        _require(store.put("frozen-hypothesis", frozen) == artifacts[0], "hypothesis-artifact-manifest-mismatch")
         for index, trial in enumerate(trials):
-            artifacts.extend([store.put("trial-%d-ledger" % index, {"simulated": True, "trades": trial["evaluation"]["tradeLedger"]}), store.put("trial-%d-equity" % index, {"simulated": True, "equity": trial["evaluation"]["equityCurve"]})])
+            offset = 1 + index * 2
+            _require(store.put("trial-%d-ledger" % index, {"simulated": True, "trades": trial["evaluation"]["tradeLedger"]}) == artifacts[offset] and store.put("trial-%d-equity" % index, {"simulated": True, "equity": trial["evaluation"]["equityCurve"]}) == artifacts[offset + 1], "hypothesis-artifact-manifest-mismatch")
         # The stored report is self-hashed.  Artifact locations are deliberately
         # not injected into it, otherwise a retry would change its identity.
-        artifacts.append(store.put("report", report))
+        _require(store.put("report", report)["sha256"] == _digest(report), "hypothesis-artifact-manifest-mismatch")
     return report
 
 
@@ -391,11 +432,18 @@ def frozen_retest(report: dict[str, Any], config: dict[str, Any], *, evidence_ro
                report_metadata={"frozenRuleRetest": True, "originalReportSha256": report["sha256"]})
 
 
-def replay(report: dict[str, Any], config: dict[str, Any], *, allow_synthetic_smoke: bool = False) -> dict[str, Any]:
+def replay(report: dict[str, Any], config: dict[str, Any], *, evidence_root: Path | None = None, allow_synthetic_smoke: bool = False) -> dict[str, Any]:
     """Read-only deterministic replay of frozen rules, dataset hashes, trades and equity."""
     _require(type(report) is dict and report.get("sha256") == _digest({key: value for key, value in report.items() if key != "sha256"}), "hypothesis-report-identity-mismatch")
     frozen = report.get("frozen")
     _require(type(frozen) is dict and type(frozen.get("hypotheses")) is list, "hypothesis-invalid-frozen-report")
+    _require(evidence_root is not None, "hypothesis-replay-evidence-root-required")
+    store = ArtifactStore(evidence_root / report["sha256"], create=False)
+    _require(store.get("report") == report, "hypothesis-replay-stored-report-mismatch")
+    manifest = report.get("artifactManifest")
+    _require(type(manifest) is list and manifest and manifest[-1] == {"name": "report", "sha256": "self"}, "hypothesis-artifact-manifest-mismatch")
+    for item in manifest[:-1]:
+        _require(type(item) is dict and set(item) == {"name", "sha256"} and _digest(store.get(item["name"])) == item["sha256"], "hypothesis-replay-artifact-mismatch")
     replayed = run(config, allow_synthetic_smoke=allow_synthetic_smoke, frozen_rules=frozen["hypotheses"], retained_attempt_count=frozen["selectionAccounting"]["retainedAttemptCount"])
     _require(replayed["frozen"] == frozen and replayed["trials"] == report.get("trials"), "hypothesis-replay-mismatch")
     return {"version": VERSION, "replay": "verified", "reportSha256": report["sha256"], "dataset": frozen["dataset"], "trialCount": len(replayed["trials"]), "simulated": True}
