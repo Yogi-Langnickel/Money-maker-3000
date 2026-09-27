@@ -18,9 +18,12 @@ from pathlib import Path
 from typing import Any
 
 from . import signal_toolkit as S
+from . import research_cycle as R
 
 VERSION = "instrument-profit-hypothesis.v1"
 ALLOWED_INTERVALS = ("1h", "4h", "1d", "1w")
+INTERVAL_SECONDS = {"1h": 60 * 60, "4h": 4 * 60 * 60, "1d": 24 * 60 * 60, "1w": 7 * 24 * 60 * 60}
+TIMEFRAME_RANK = {name: index for index, name in enumerate(ALLOWED_INTERVALS)}
 INSTRUMENTS = {
     "SPY": {"product": "ETF", "currency": "USD", "session": "US-equities-regular"},
     "QQQ": {"product": "ETF", "currency": "USD", "session": "US-equities-regular"},
@@ -75,7 +78,7 @@ def _bar(value: Any, interval: str, index: int) -> dict[str, Any]:
     _require(value["high"] >= max(value["open"], value["close"]) and value["low"] <= min(value["open"], value["close"]), "hypothesis-inconsistent-ohlc")
     _require(type(value["provenance"]) is dict and set(value["provenance"]) == {"source", "adjustmentBasis", "retrievedAt", "rights"}, "hypothesis-invalid-provenance")
     _require(type(value["provenance"]["source"]) is str and type(value["provenance"]["adjustmentBasis"]) is str and type(value["provenance"]["rights"]) is str, "hypothesis-invalid-provenance")
-    _time(value["provenance"]["retrievedAt"])
+    _require(available <= _time(value["provenance"]["retrievedAt"]), "hypothesis-retrieval-before-availability")
     return {**value, "start": _stamp(value["start"]), "end": _stamp(value["end"]), "availableAt": _stamp(value["availableAt"])}
 
 
@@ -95,12 +98,18 @@ def validate_dataset(config: dict[str, Any]) -> dict[str, Any]:
         rows = datasets[interval]
         _require(type(rows) is list and 1 <= len(rows) <= MAX_CANDLES, "hypothesis-candle-count")
         normalized = [_bar(row, interval, index) for index, row in enumerate(rows)]
-        previous = None
+        previous_start = previous_end = previous_available = None
         for row in normalized:
-            current = _time(row["start"])
-            _require(previous is None or current > previous, "hypothesis-unordered-candles")
+            current, end, available = _time(row["start"]), _time(row["end"]), _time(row["availableAt"])
+            _require((end - current).total_seconds() == INTERVAL_SECONDS[interval], "hypothesis-interval-duration-mismatch")
+            _require(previous_start is None or current > previous_start, "hypothesis-unordered-candles")
+            # The interval is a chronological fact, not retrieval order.  A
+            # later bar cannot become available before an earlier bar, and bars
+            # may not overlap; otherwise an old revised/late bar could leak.
+            _require(previous_end is None or end > previous_end and current >= previous_end, "hypothesis-overlapping-or-unordered-candles")
+            _require(previous_available is None or available >= previous_available, "hypothesis-nonmonotonic-availability")
             _require(row["provenance"]["source"] == instrument["source"] and row["provenance"]["rights"] == instrument["rights"] and row["provenance"]["adjustmentBasis"] == instrument["adjustmentBasis"], "hypothesis-provenance-mismatch")
-            previous = current
+            previous_start, previous_end, previous_available = current, end, available
         starts.append(_time(normalized[0]["start"])); ends.append(_time(normalized[-1]["end"]))
         result[interval] = {"rows": normalized, "sha256": _digest(normalized), "count": len(normalized),
                             "coverage": {"start": normalized[0]["start"], "end": normalized[-1]["end"],
@@ -137,6 +146,17 @@ def _signal(hypothesis: dict[str, Any], rows: list[dict[str, Any]], index: int) 
     return hypothesis["id"] == "trend-return-3.v1" or (_rsi([row["close"] for row in rows[: index + 1]]) or 101) < 70
 
 
+def _inputs_available_for_signal(rows: list[dict[str, Any]], index: int) -> bool:
+    """Defence in depth for direct callers that skipped dataset validation.
+
+    The longest current rule is RSI-14, so every candle it could read must
+    have been available at the decision timestamp.  This prevents a late old
+    candle from changing a signal or its subsequent fill.
+    """
+    decision_time = _time(rows[index]["availableAt"])
+    return all(_time(row["availableAt"]) <= decision_time for row in rows[max(0, index - 14): index + 1])
+
+
 def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_cash: float = 10000.0,
              cost_bps: float | None = None, start_index: int = 0, end_index: int | None = None,
              aligned_signals: set[int] | None = None) -> dict[str, Any]:
@@ -145,14 +165,16 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
     stop = hypothesis["stopLossPct"]; max_hold = hypothesis["maxHoldingBars"]; cost = (hypothesis["costBps"] if cost_bps is None else cost_bps) / 10000
     end_index = len(rows) - 1 if end_index is None else end_index
     cash, quantity, entry, entry_index, trades, equity = initial_cash, 0.0, None, None, [], []
+    entry_cash_spent = entry_cost = 0.0; entry_id = None
     pending = False; exposure_bars = 0; transaction_costs = 0.0; gross_turnover = 0.0
     for index in range(max(0, start_index), end_index + 1):
         row = rows[index]
         # Only a signal previously available before this bar's start may execute here.
         if pending and quantity == 0:
-            gross = cash / (1 + cost); quantity, cash, entry, entry_index = gross / row["open"], 0.0, row["open"], index
+            gross = cash / (1 + cost); entry_cost = gross * cost; entry_cash_spent = gross + entry_cost
+            quantity, cash, entry, entry_index, entry_id = gross / row["open"], 0.0, row["open"], index, "entry-%d" % index
             transaction_costs += gross * cost; gross_turnover += gross
-            trades.append({"type": "entry", "signalBar": index - 1, "fillBar": index, "fill": row["open"], "cost": gross * cost, "time": row["start"]})
+            trades.append({"id": entry_id, "type": "entry", "signalBar": index - 1, "fillBar": index, "fill": row["open"], "notional": gross, "cost": entry_cost, "cashSpent": entry_cash_spent, "time": row["start"]})
             pending = False
         if quantity and entry is not None:
             stop_price = entry * (1 - stop)
@@ -164,15 +186,16 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
             if fill is not None:
                 gross = quantity * fill; proceeds = gross * (1 - cost)
                 transaction_costs += gross * cost; gross_turnover += gross
-                trades.append({"type": "exit", "entryBar": entry_index, "fillBar": index, "fill": fill, "cost": gross * cost, "reason": reason,
-                               "simulatedNetPnl": proceeds - quantity * entry, "time": row["end"]})
-                cash, quantity, entry, entry_index = proceeds, 0.0, None, None
+                exit_cost = gross * cost
+                trades.append({"entryId": entry_id, "type": "exit", "entryBar": entry_index, "fillBar": index, "fill": fill, "notional": gross, "cost": exit_cost, "entryCost": entry_cost, "entryCashSpent": entry_cash_spent, "reason": reason,
+                               "simulatedNetPnl": proceeds - entry_cash_spent, "time": row["end"]})
+                cash, quantity, entry, entry_index, entry_cash_spent, entry_cost, entry_id = proceeds, 0.0, None, None, 0.0, 0.0, None
         if quantity:
             exposure_bars += 1
         equity.append({"time": row["end"], "simulatedEquity": cash + quantity * row["close"]})
         if quantity == 0 and index < end_index and index >= 14:
             next_row = rows[index + 1]
-            pending = ((aligned_signals is None or index in aligned_signals) and _signal(hypothesis, rows, index)
+            pending = ((aligned_signals is None or index in aligned_signals) and _inputs_available_for_signal(rows, index) and _signal(hypothesis, rows, index)
                        and _time(row["availableAt"]) <= _time(next_row["start"]))
     final = equity[-1]["simulatedEquity"] if equity else initial_cash
     exits = [item for item in trades if item["type"] == "exit"]
@@ -180,7 +203,7 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
     for point in equity:
         peak = max(peak, point["simulatedEquity"]); maximum_drawdown = max(maximum_drawdown, (peak - point["simulatedEquity"]) / peak)
     return {"simulated": True, "initialCash": initial_cash, "finalEquity": final, "netSimulatedReturn": final / initial_cash - 1,
-            "tradeLedger": trades, "equityCurve": equity, "tradeCount": len(exits), "expectancy": (sum(item["simulatedNetPnl"] for item in exits) / len(exits) if exits else None),
+            "tradeLedger": trades, "equityCurve": equity, "tradeCount": len(exits), "closedSimulatedPnl": sum(item["simulatedNetPnl"] for item in exits), "expectancy": (sum(item["simulatedNetPnl"] for item in exits) / len(exits) if exits else None),
             "maxDrawdown": maximum_drawdown, "exposure": exposure_bars / len(equity) if equity else 0,
             "grossTurnover": gross_turnover / initial_cash, "transactionCosts": transaction_costs, "costBps": cost * 10000, "openPositionAtEnd": quantity > 0,
             "policy": "next-executable-bar; conservative intrabar stop; final open position marked-to-market"}
@@ -249,7 +272,9 @@ class ArtifactStore:
 def _aligned_signal_indices(dataset: dict[str, Any], primary: str) -> tuple[set[int], dict[str, int]]:
     """Allow a primary signal only when every higher timeframe was available then."""
     primary_rows = dataset["intervals"][primary]["rows"]
-    others = {name: detail["rows"] for name, detail in dataset["intervals"].items() if name != primary}
+    # Only a coarser interval is a higher-timeframe gate.  Finer bars are
+    # retained for coverage only and cannot masquerade as confirmation.
+    others = {name: detail["rows"] for name, detail in dataset["intervals"].items() if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary]}
     allowed, evidence = set(), {name: 0 for name in others}
     for index, row in enumerate(primary_rows):
         usable = True
@@ -266,21 +291,55 @@ def _failure_artifact(root: Path | None, config: Any, code: str) -> None:
         ArtifactStore(root / ("failed-" + _digest({"config": _digest(config), "code": code}))).put("failed-run", {"version": VERSION, "status": "failed", "errorCode": code, "configSha256": _digest(config)})
 
 
+def _attempt_count(root: Path | None, config_sha256: str) -> int:
+    if root is None or not root.exists():
+        return 1
+    identities = {config_sha256}
+    for path in root.iterdir():
+        report = path / "report.json"
+        if not path.is_dir() or not report.exists():
+            continue
+        try:
+            payload = json.loads(report.read_bytes())
+            identity = payload["frozen"]["selectionAccounting"]["attemptConfigSha256"]
+            if type(identity) is str:
+                identities.add(identity)
+        except (ValueError, KeyError, TypeError):
+            # A corrupt retained artifact cannot be evidence for an attempt.
+            continue
+    return len(identities)
+
+
 def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synthetic_smoke: bool = False,
-        frozen_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        frozen_rules: list[dict[str, Any]] | None = None, retained_attempt_count: int | None = None) -> dict[str, Any]:
     try:
         _require(config.get("classification") in ("synthetic", "observed-attested"), "hypothesis-invalid-classification")
         _require(config.get("classification") != "synthetic" or allow_synthetic_smoke, "hypothesis-synthetic-smoke-opt-in-required")
+        if config.get("classification") == "observed-attested":
+            _require(config.get("instrument", {}).get("source") in ("etoro", "fmp-eod"), "hypothesis-observed-source-unapproved")
+            R.retention_check(config["instrument"]["source"], config.get("retention"))
+            R.validate_interpretation(config.get("interpretation"))
+            _require(config["interpretation"]["instrumentVerified"] and config["interpretation"]["trainingPermitted"]
+                     and config["interpretation"]["currency"] == config["instrument"]["currency"]
+                     and config["interpretation"]["session"] == config["instrument"]["session"], "hypothesis-observed-instrument-or-rights-unapproved")
         _require(config.get("refinementRequested") is not True, "hypothesis-holdout-refinement-requires-fresh-evidence")
         dataset = validate_dataset(config); primary = config.get("primaryInterval")
     except HypothesisError as exc:
         _failure_artifact(evidence_root, config, str(exc)); raise
-    _require(primary in dataset["intervals"], "hypothesis-primary-interval-missing")
-    _require(dataset["overlap"]["usable"], "hypothesis-no-overlapping-usable-history")
+    if primary not in dataset["intervals"]:
+        _failure_artifact(evidence_root, config, "hypothesis-primary-interval-missing"); raise HypothesisError("hypothesis-primary-interval-missing")
+    if not dataset["overlap"]["usable"]:
+        _failure_artifact(evidence_root, config, "hypothesis-no-overlapping-usable-history"); raise HypothesisError("hypothesis-no-overlapping-usable-history")
     rows = dataset["intervals"][primary]["rows"]
-    _require(len(rows) >= 25, "hypothesis-insufficient-evidence")
-    cost = config.get("costBps", 10.0); candidates = frozen_hypotheses(cost) if frozen_rules is None else frozen_rules
-    _require(type(candidates) is list and 1 <= len(candidates) <= 2 and all(candidate in frozen_hypotheses(cost) for candidate in candidates), "hypothesis-frozen-rule-drift")
+    if len(rows) < 25:
+        _failure_artifact(evidence_root, config, "hypothesis-insufficient-evidence"); raise HypothesisError("hypothesis-insufficient-evidence")
+    cost = config.get("costBps", 10.0)
+    try:
+        candidates = frozen_hypotheses(cost) if frozen_rules is None else frozen_rules
+    except HypothesisError as exc:
+        _failure_artifact(evidence_root, config, str(exc)); raise
+    if not (type(candidates) is list and 1 <= len(candidates) <= 2 and all(candidate in frozen_hypotheses(cost) for candidate in candidates)):
+        _failure_artifact(evidence_root, config, "hypothesis-frozen-rule-drift"); raise HypothesisError("hypothesis-frozen-rule-drift")
     aligned_signals, alignment_evidence = _aligned_signal_indices(dataset, primary)
     split = max(15, int(len(rows) * .6)); evaluation_start = split + 1
     trials = []
@@ -295,8 +354,9 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
                        "benchmarkReturn": benchmark, "costSensitivityAtDoubleCost": sensitivity, "chronologicalStability": thirds,
                        "incrementalNetReturn": evaluation["netSimulatedReturn"] - (trials[0]["evaluation"]["netSimulatedReturn"] if trials else 0),
                        "uncertainty": {"tradeCount": evaluation["tradeCount"], "assessment": "insufficient-independent-trades" if evaluation["tradeCount"] < 10 else "dependent-chronological-sample"}, "grade": grade, "gradeReason": reason})
+    config_sha256 = _digest(config)
     frozen = {"version": VERSION, "instrument": config["instrument"], "primaryInterval": primary, "dataset": {key: {field: value[field] for field in ("sha256", "count", "coverage")} for key, value in dataset["intervals"].items()},
-              "overlap": dataset["overlap"], "timeframeAlignment": {"eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptedTrials": len(trials), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
+              "overlap": dataset["overlap"], "timeframeAlignment": {"primary": primary, "roles": {name: ("primary" if name == primary else "higher-confirmation" if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary] else "lower-coverage-only") for name in dataset["intervals"]}, "eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptConfigSha256": config_sha256, "attemptedTrials": len(trials), "retainedAttemptCount": retained_attempt_count if retained_attempt_count is not None else _attempt_count(evidence_root, config_sha256), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
     report = {"version": VERSION, "simulated": True, "operationalStatus": "offline-research-complete", "validationStage": "untouched-chronological-evaluation", "frozen": frozen,
               "trials": trials, "limitation": "Synthetic fixtures prove mechanics only; no empirical profitability has been demonstrated." if config["classification"] == "synthetic" else "Observed-attested local data still does not establish future profitability.",
               "boundary": {"providerCalls": "blocked", "executionRoutes": "absent", "longOnly": True, "leverage": 1, "profitPromise": "absent"}}
@@ -312,12 +372,23 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
     return report
 
 
-def frozen_retest(report: dict[str, Any], config: dict[str, Any], *, allow_synthetic_smoke: bool = False) -> dict[str, Any]:
+def frozen_retest(report: dict[str, Any], config: dict[str, Any], *, evidence_root: Path | None = None, allow_synthetic_smoke: bool = False) -> dict[str, Any]:
     _require(type(report) is dict and report.get("version") == VERSION, "hypothesis-invalid-report")
     _require(report.get("sha256") == _digest({key: value for key, value in report.items() if key != "sha256"}), "hypothesis-report-identity-mismatch")
     _require(config.get("retune") is not True, "hypothesis-retuning-requires-new-hypothesis")
+    _require(type(report.get("frozen")) is dict and config.get("instrument") != report["frozen"].get("instrument"), "hypothesis-retest-requires-different-instrument")
     permitted = [trial["hypothesis"] for trial in report.get("trials", []) if trial.get("grade") in ("weak", "strong")]
     _require(permitted, "hypothesis-no-weak-or-strong-candidate")
     copied = dict(config); copied["costBps"] = permitted[0]["costBps"]
-    outcome = run(copied, allow_synthetic_smoke=allow_synthetic_smoke, frozen_rules=permitted)
-    return {"version": VERSION, "frozenRuleRetest": True, "originalReportSha256": report["sha256"], "instrument": copied["instrument"], "results": outcome["trials"], "simulated": True}
+    outcome = run(copied, evidence_root=evidence_root, allow_synthetic_smoke=allow_synthetic_smoke, frozen_rules=permitted)
+    return {**outcome, "frozenRuleRetest": True, "originalReportSha256": report["sha256"]}
+
+
+def replay(report: dict[str, Any], config: dict[str, Any], *, allow_synthetic_smoke: bool = False) -> dict[str, Any]:
+    """Read-only deterministic replay of frozen rules, dataset hashes, trades and equity."""
+    _require(type(report) is dict and report.get("sha256") == _digest({key: value for key, value in report.items() if key != "sha256"}), "hypothesis-report-identity-mismatch")
+    frozen = report.get("frozen")
+    _require(type(frozen) is dict and type(frozen.get("hypotheses")) is list, "hypothesis-invalid-frozen-report")
+    replayed = run(config, allow_synthetic_smoke=allow_synthetic_smoke, frozen_rules=frozen["hypotheses"], retained_attempt_count=frozen["selectionAccounting"]["retainedAttemptCount"])
+    _require(replayed["frozen"] == frozen and replayed["trials"] == report.get("trials"), "hypothesis-replay-mismatch")
+    return {"version": VERSION, "replay": "verified", "reportSha256": report["sha256"], "dataset": frozen["dataset"], "trialCount": len(replayed["trials"]), "simulated": True}

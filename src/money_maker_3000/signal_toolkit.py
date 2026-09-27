@@ -123,11 +123,11 @@ def whole_cohort_coverage(rows: list[Any], *, completed_at: Any, available_at: A
     _, available = _validate_rows(rows, completed_at=completed_at, available_at=available_at)
     coverage = []
     for name in sorted(REGISTRY):
-        missing: list[str] = []
+        missing: list[str] = []; endpoint_evidence: list[dict[str, Any]] = []
         for index in range(len(rows)):
-            # Earlier endpoints use the next row's declared availability when supplied;
-            # never substitute completion time as availability time.
-            row = rows[min(index + 1, len(rows) - 1)]
+            # The endpoint's own declared availability is authoritative.  A
+            # later row can neither supply nor overwrite this evidence.
+            row = rows[index]
             endpoint_available = _row(row, "available_at") or _row(row, "availableAt") or timestamp(available)
             endpoint_completed = _row(rows[index], "end") or _row(rows[index], "timestamp") or _row(rows[index], "date")
             if "T" not in str(endpoint_completed):
@@ -136,8 +136,10 @@ def whole_cohort_coverage(rows: list[Any], *, completed_at: Any, available_at: A
                                        available_at=endpoint_available, ohlc_attested=ohlc_attested, ohlc_basis=ohlc_basis)
             if outcome["status"] != "available":
                 missing.append(str(outcome["endpoint"]))
+            endpoint_evidence.append({"endpoint": str(outcome["endpoint"]), "completedAt": outcome["completedAt"], "availableAt": outcome["availableAt"], "status": outcome["status"]})
         coverage.append({"feature": name, "endpoints": len(rows), "availableEndpoints": len(rows) - len(missing),
-                         "unavailableEndpoints": len(missing), "unavailableEndpointsAt": missing})
+                         "unavailableEndpoints": len(missing), "unavailableEndpointsAt": missing,
+                         "endpointAvailabilityEvidence": endpoint_evidence})
     return {"version": VERSION, "availableAt": timestamp(available_at), "coverage": coverage}
 
 

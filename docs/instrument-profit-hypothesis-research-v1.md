@@ -17,6 +17,13 @@ availability timestamps, genuine OHLCV, and source/rights/retrieval/basis
 provenance. A requested product not in that contract is rejected: GLD is not
 spot gold, and neither is a CFD silently substituted.
 
+Each declared interval has an exact UTC cadence (`1h`, `4h`, `1d`, or `1w`),
+non-overlapping chronological bars and nondecreasing availability. A late old
+candle is rejected rather than silently changing an earlier decision. Only a
+coarser supplied interval is a higher-timeframe confirmation gate; finer input
+is explicitly coverage-only. Every candle read by a rule must be available at
+the signal decision time.
+
 Coverage reports preserve each interval's actual first/last start/end and
 availability facts plus their overlap. The workflow never invents a page,
 candle, OHLC field, adjustment, or availability time. A primary-bar signal is
@@ -53,6 +60,13 @@ locked atomic links and exact-byte retry equality. A repeat run resumes safely;
 a controlled invalid input can retain a value-blind failed-run record. Frozen
 weak/strong candidates can be retested on a different permitted instrument only
 with exact original rule bytes and cost; any retuning is a new hypothesis.
+Observed-attested local candles additionally require the established source
+retention/model-use and instrument-interpretation gates before evaluation.
+
+`profit-hypothesis-replay` is a read-only replay: it accepts the saved report
+and exact local config, revalidates report/dataset/rule identity, recomputes the
+trial ledger and equity curve, and fails on any mismatch. It is distinct from a
+cross-instrument retest.
 
 ## Invocation
 
@@ -66,3 +80,5 @@ PYTHONPATH=src python3.13 -m money_maker_3000.cli profit-hypothesis \
 Do not pass a provider URL, credential, account data or execution option: none
 is accepted. For a frozen cross-instrument check, use `profit-hypothesis-retest`
 with the saved report and a new local-candle config; it rejects a `retune` flag.
+Use `profit-hypothesis-replay --report <report.json> --config <config.json>`
+to verify an existing run without writing evidence.

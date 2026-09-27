@@ -227,7 +227,12 @@ def _build_parser() -> argparse.ArgumentParser:
     retest = subparsers.add_parser("profit-hypothesis-retest", help="frozen-rule offline cross-instrument retest")
     retest.add_argument("--report", required=True, type=Path)
     retest.add_argument("--config", required=True, type=Path)
+    retest.add_argument("--evidence-root", type=Path)
     retest.add_argument("--allow-synthetic-smoke", action="store_true")
+    replay = subparsers.add_parser("profit-hypothesis-replay", help="read-only deterministic replay of a frozen hypothesis report")
+    replay.add_argument("--report", required=True, type=Path)
+    replay.add_argument("--config", required=True, type=Path)
+    replay.add_argument("--allow-synthetic-smoke", action="store_true")
     return parser
 
 
@@ -236,7 +241,10 @@ def run_profit_hypothesis(args: argparse.Namespace) -> dict[str, Any]:
     config = _learning._json(_learning._read(args.config, _learning.MAX_JSON_BYTES))
     if args.command == "profit-hypothesis-retest":
         report = _learning._json(_learning._read(args.report, 8 * 1024 * 1024))
-        return _profit_hypothesis.frozen_retest(report, config, allow_synthetic_smoke=args.allow_synthetic_smoke)
+        return _profit_hypothesis.frozen_retest(report, config, evidence_root=args.evidence_root, allow_synthetic_smoke=args.allow_synthetic_smoke)
+    if args.command == "profit-hypothesis-replay":
+        report = _learning._json(_learning._read(args.report, 8 * 1024 * 1024))
+        return _profit_hypothesis.replay(report, config, allow_synthetic_smoke=args.allow_synthetic_smoke)
     return _profit_hypothesis.run(config, evidence_root=args.evidence_root, allow_synthetic_smoke=args.allow_synthetic_smoke)
 
 

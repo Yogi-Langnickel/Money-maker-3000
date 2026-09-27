@@ -13,6 +13,7 @@ from unittest.mock import patch
 from money_maker_3000 import learning as L
 from money_maker_3000 import research_cycle as R
 from money_maker_3000 import forward_evaluation as F
+from money_maker_3000 import signal_toolkit as S
 from money_maker_3000.market_history import Bar
 
 
@@ -151,6 +152,24 @@ class ResearchCycleTests(unittest.TestCase):
         self.store.put('model',extra)
         with self.assertRaisesRegex(L.LearningError,'store-model-membership-mismatch'):
             R.semantic_replay(self.store,self.bars,self.manifest,experiment,retention=RETENTION)
+
+    def test_toolkit_bound_predecessor_replays_as_a_legacy_successor(self):
+        signal = {'ohlcAttested': False, 'ohlcBasis': None,
+                  'completedAt': self.bars[-1].date + 'T00:00:00Z',
+                  'availableAt': self.bars[-1].date + 'T00:00:00Z'}
+        bound_protocol = R.freeze_protocol(self.bars, self.manifest, 'volatility-band-accumulator', RETENTION, INTERPRETATION,
+                                            created_at='2026-09-12T00:00:00Z', signal_toolkit=signal)
+        bound_experiment = R.run_experiment(self.store, self.bars, bound_protocol)
+        bound_id = next(reference['id'] for reference in bound_experiment['payload']['models'] if reference['role'] == 'incumbent')
+        bound = next(record['payload'] for record in self.store.records('model') if record['id'] == bound_id)
+        self.assertIn('signalFeatureBundleSha256', bound)
+        legacy_protocol = R.freeze_protocol(self.bars, self.manifest, 'volatility-band-accumulator', RETENTION, INTERPRETATION,
+                                            created_at='2026-09-13T00:00:00Z', incumbent_model=bound)
+        legacy = R.run_experiment(self.store, self.bars, legacy_protocol, incumbent=bound)
+        imported_id = legacy['payload']['models'][0]['id']
+        imported = next(record['payload'] for record in self.store.records('model') if record['id'] == imported_id)
+        self.assertNotIn('signalFeatureBundleSha256', imported)
+        self.assertEqual(R.semantic_replay(self.store, self.bars, self.manifest, legacy, retention=RETENTION)['semanticReplay'], 'verified')
 
     def test_semantic_replay_rejects_self_consistent_mutated_cutoffs_and_reserve(self):
         """Recomputed dependent records cannot make a different partition canonical."""

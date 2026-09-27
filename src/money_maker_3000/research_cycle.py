@@ -348,7 +348,10 @@ def run_experiment(store: EvidenceStore, bars: list, protocol: dict, *, incumben
             L._require(incumbent['source'] == protocol['manifest']['source'] and incumbent['symbol'] == protocol['manifest']['symbol']
                        and incumbent['priceBasis'] == protocol['manifest']['priceBasis'], 'incumbent-source-mismatch')
             existing, _ = _evaluate(bars,reserved,strategy,incumbent['parameters'],incumbent['fit'],deadline,cache)
-            imported = dict(incumbent, protocolId=frozen['id'], frozenAt=protocol['createdAt'],
+            # Bind the predecessor identity, then construct successor context.
+            # In particular, a legacy successor must not inherit an optional
+            # toolkit binding that its protocol does not carry.
+            imported = dict(incumbent_provenance(incumbent), protocolId=frozen['id'], frozenAt=protocol['createdAt'],
                             retention=protocol['retention'], interpretation=protocol['interpretation'])
             if 'signalFeatureBundle' in protocol:
                 imported['signalFeatureBundleSha256'] = protocol['signalFeatureBundle']['sha256']

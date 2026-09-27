@@ -14,9 +14,10 @@ from money_maker_3000 import cli
 
 def rows(count: int = 48, *, downward: bool = False, interval: str = "1d"):
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    duration = {"1h": timedelta(hours=1), "4h": timedelta(hours=4), "1d": timedelta(days=1), "1w": timedelta(days=7)}[interval]
     values = []
     for index in range(count):
-        when = start + timedelta(days=index)
+        when = start + duration * index
         # A modest trend normally earns more than a 500bp round-trip cost,
         # while negative gap bars supply a deterministic losing case.
         close = 100 + index * .7
@@ -26,18 +27,18 @@ def rows(count: int = 48, *, downward: bool = False, interval: str = "1d"):
         if downward and index % 5 == 4:
             open_value = close + 2
         values.append({"start": when.isoformat().replace("+00:00", "Z"),
-                       "end": (when + timedelta(hours=20)).isoformat().replace("+00:00", "Z"),
-                       "availableAt": (when + timedelta(hours=21)).isoformat().replace("+00:00", "Z"),
+                       "end": (when + duration).isoformat().replace("+00:00", "Z"),
+                       "availableAt": (when + duration).isoformat().replace("+00:00", "Z"),
                        "open": open_value, "high": max(open_value, close) + 1, "low": min(open_value, close) - 1,
-                       "close": close, "volume": 1000, "provenance": {"source": "synthetic", "adjustmentBasis": "unadjusted", "retrievedAt": "2024-03-01T00:00:00Z", "rights": "synthetic-test-only"}})
+                       "close": close, "volume": 1000, "provenance": {"source": "synthetic", "adjustmentBasis": "unadjusted", "retrievedAt": (when + duration).isoformat().replace("+00:00", "Z"), "rights": "synthetic-test-only"}})
     return values
 
 
 def config(count: int = 48, *, downward: bool = False):
-    data = rows(count, downward=downward)
+    data = rows(count, downward=downward, interval="1d")
     return {"version": P.VERSION, "classification": "synthetic", "primaryInterval": "1d", "costBps": 10,
             "instrument": {"symbol": "SPY", "product": "ETF", "currency": "USD", "session": "US-equities-regular", "source": "synthetic", "rights": "synthetic-test-only", "adjustmentBasis": "unadjusted"},
-            "datasets": {"1d": data, "4h": data}}
+            "datasets": {"1d": data, "4h": rows(count, downward=downward, interval="4h"), "1w": rows(count, downward=downward, interval="1w")}}
 
 
 class ProfitHypothesisTests(unittest.TestCase):
@@ -46,7 +47,7 @@ class ProfitHypothesisTests(unittest.TestCase):
         profitable = P.backtest(candidate, rows(), end_index=47)
         losing = P.backtest(candidate, rows(downward=True), end_index=47)
         self.assertGreater(profitable["netSimulatedReturn"], 0)
-        self.assertLess(losing["netSimulatedReturn"], profitable["netSimulatedReturn"])
+        self.assertLess(losing["netSimulatedReturn"], 0)
         self.assertTrue(profitable["simulated"])
 
     def test_costs_eliminate_an_apparent_edge_and_never_fill_same_bar(self):
@@ -54,12 +55,40 @@ class ProfitHypothesisTests(unittest.TestCase):
         edge = P.backtest(candidate, rows(), cost_bps=0)
         expensive = P.backtest(candidate, rows(), cost_bps=500)
         self.assertGreater(edge["netSimulatedReturn"], expensive["netSimulatedReturn"])
+        self.assertLessEqual(expensive["netSimulatedReturn"], 0)
         for entry in [item for item in edge["tradeLedger"] if item["type"] == "entry"]:
             self.assertEqual(entry["fillBar"], entry["signalBar"] + 1)
+
+    def test_late_earlier_candle_is_rejected_and_cannot_drive_a_signal(self):
+        late = config()
+        late["datasets"]["1d"][13]["availableAt"] = "2024-02-15T00:00:00Z"
+        late["datasets"]["1d"][13]["provenance"]["retrievedAt"] = "2024-02-15T00:00:00Z"
+        with self.assertRaisesRegex(P.HypothesisError, "nonmonotonic-availability"):
+            P.validate_dataset(late)
+        direct = rows()
+        direct[13]["availableAt"] = "2024-02-15T00:00:00Z"
+        # A direct backtest call receives the same eligibility protection: the
+        # delayed bar is in the RSI lookback for signal 14, so no Jan-16 fill.
+        result = P.backtest(P.frozen_hypotheses(10)[0], direct, end_index=15)
+        self.assertEqual(result["tradeLedger"], [])
+
+    def test_closed_pnl_expectancy_and_cash_reconcile_after_both_costs(self):
+        result = P.backtest(P.frozen_hypotheses(100)[0], rows(), end_index=18)
+        exits = [item for item in result["tradeLedger"] if item["type"] == "exit"]
+        self.assertEqual(len(exits), 1)
+        exit = exits[0]
+        self.assertAlmostEqual(exit["simulatedNetPnl"], exit["notional"] - exit["cost"] - exit["entryCashSpent"])
+        self.assertAlmostEqual(result["expectancy"], exit["simulatedNetPnl"])
+        self.assertAlmostEqual(result["finalEquity"], result["initialCash"] + result["closedSimulatedPnl"])
+        self.assertAlmostEqual(result["transactionCosts"], exit["entryCost"] + exit["cost"])
 
     def test_interval_contract_overlap_caps_and_exact_timestamps(self):
         dataset = P.validate_dataset(config())
         self.assertTrue(dataset["overlap"]["usable"])
+        self.assertEqual(P.run(config(), allow_synthetic_smoke=True)["frozen"]["timeframeAlignment"]["roles"], {"1d": "primary", "4h": "lower-coverage-only", "1w": "higher-confirmation"})
+        invalid_duration = config(); invalid_duration["datasets"]["4h"][0]["end"] = "2024-01-01T20:00:00Z"; invalid_duration["datasets"]["4h"][0]["availableAt"] = "2024-01-01T20:00:00Z"; invalid_duration["datasets"]["4h"][0]["provenance"]["retrievedAt"] = "2024-01-01T20:00:00Z"
+        with self.assertRaisesRegex(P.HypothesisError, "interval-duration"):
+            P.validate_dataset(invalid_duration)
         too_many = config(); too_many["datasets"]["1d"] = rows(1001)
         with self.assertRaisesRegex(P.HypothesisError, "candle-count"):
             P.validate_dataset(too_many)
@@ -76,6 +105,7 @@ class ProfitHypothesisTests(unittest.TestCase):
         coverage = S.whole_cohort_coverage(history, completed_at="2024-01-02T00:00:00Z", available_at="2024-01-03T00:00:00.123456Z")
         self.assertEqual(coverage["availableAt"], "2024-01-03T00:00:00.123456Z")
         self.assertEqual(coverage["coverage"][0]["endpoints"], 2)
+        self.assertEqual(coverage["coverage"][0]["endpointAvailabilityEvidence"][0]["availableAt"], "2024-01-02T00:00:00.123456Z")
 
     def test_insufficient_evidence_and_holdout_refinement_are_rejected(self):
         with self.assertRaisesRegex(P.HypothesisError, "insufficient-evidence"):
@@ -83,6 +113,10 @@ class ProfitHypothesisTests(unittest.TestCase):
         refine = config(); refine["refinementRequested"] = True
         with self.assertRaisesRegex(P.HypothesisError, "holdout-refinement"):
             P.run(refine, allow_synthetic_smoke=True)
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(P.HypothesisError, "insufficient-evidence"):
+                P.run(config(24), evidence_root=Path(root), allow_synthetic_smoke=True)
+            self.assertEqual(len(list(Path(root).glob("*/failed-run.json"))), 1)
 
     def test_artifact_idempotent_recovery_and_frozen_retest_boundary(self):
         with tempfile.TemporaryDirectory() as root:
@@ -90,11 +124,27 @@ class ProfitHypothesisTests(unittest.TestCase):
             second = P.run(config(), evidence_root=Path(root), allow_synthetic_smoke=True)
             self.assertEqual(first["sha256"], second["sha256"])
             self.assertTrue((Path(root) / first["sha256"] / "report.json").exists())
+            self.assertEqual(P.replay(first, config(), allow_synthetic_smoke=True)["replay"], "verified")
+            changed = config(); changed["costBps"] = 11
+            second_config = P.run(changed, evidence_root=Path(root), allow_synthetic_smoke=True)
+            self.assertEqual(second_config["frozen"]["selectionAccounting"]["retainedAttemptCount"], 2)
         report = {"version": P.VERSION, "trials": [{"grade": "weak", "hypothesis": P.frozen_hypotheses(10)[0]}]}
         report["sha256"] = P._digest(report)
         retuned = config(); retuned["retune"] = True
         with self.assertRaisesRegex(P.HypothesisError, "retuning-requires"):
             P.frozen_retest(report, retuned, allow_synthetic_smoke=True)
+        report = {"version": P.VERSION, "frozen": {"instrument": config()["instrument"]}, "trials": [{"grade": "weak", "hypothesis": P.frozen_hypotheses(10)[0]}]}
+        report["sha256"] = P._digest(report)
+        other = config(); other["instrument"] = {**other["instrument"], "symbol": "QQQ"}
+        retest = P.frozen_retest(report, other, allow_synthetic_smoke=True)
+        self.assertTrue(retest["frozenRuleRetest"])
+        self.assertEqual(retest["originalReportSha256"], report["sha256"])
+        self.assertIn("dataset", retest["frozen"])
+
+    def test_observed_data_requires_existing_source_rights_gates(self):
+        observed = config(); observed["classification"] = "observed-attested"
+        with self.assertRaisesRegex(Exception, "observed-source-unapproved"):
+            P.run(observed)
 
     def test_successor_provenance_drops_only_successor_toolkit_context(self):
         predecessor = {"protocolId": "new", "frozenAt": "new", "retention": {}, "interpretation": {},
