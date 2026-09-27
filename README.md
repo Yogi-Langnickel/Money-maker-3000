@@ -280,6 +280,7 @@ GitHub Actions runs the same compile and standard-library test gates on Python
 Configured continuous research is documented in
 [the frozen research protocol](docs/continuous-research-protocol.md). It adds
 `research-cycle`, `research-status`, and `research-replay` commands, immutable
-five-observation forecasts, correction-aware scoring, and strategy-specific
-portability evidence. It remains local research without orders or profitability
-claims. Private inputs, source rights, and forward outcomes are separate gates.
+five-observation forecasts, correction-aware scoring, semantic read-only replay,
+and sealed strategy-specific portability evidence. It remains local research
+without orders or profitability claims. Private inputs, source rights, and
+forward outcomes are separate gates.

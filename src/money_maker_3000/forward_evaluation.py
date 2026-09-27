@@ -277,10 +277,19 @@ def status(store: EvidenceStore, *, source: str, retention: dict) -> dict:
         forecasts = [r for r in store.records('forecast') if r['payload']['source'] == source]
         ids = {r['id'] for r in forecasts}
         scores = [r for r in store.records('score') if r['payload']['forecastId'] in ids]
-        scored = {r['payload']['forecastId'] for r in scores}
-        unavailable={key for key,value in availability_events(store).items() if value['payload']['state']=='unavailable'}
-        return {'version':'continuous-research-status.v1','forecasts':len(forecasts), 'pending':len(ids-scored)+len(scored & unavailable),
-                'scored':len(scored),'scoredHistoricalTotal':len(scored),'validScored':len(scored-unavailable),'scoreRevisions':len(scores)-len(scored), 'currentlyUnavailable':len(scored & unavailable),
+        latest = {}
+        for record in scores:
+            forecast_id = record['payload']['forecastId']
+            if forecast_id not in latest or record['payload']['revision'] > latest[forecast_id]['payload']['revision']:
+                latest[forecast_id] = record
+        unavailable = {key for key, value in availability_events(store).items()
+                       if key in ids and value['payload']['state'] == 'unavailable'}
+        feature_revised = {key for key, record in latest.items() if record['payload']['featureRowsRevised']}
+        valid = set(latest) - unavailable - feature_revised
+        return {'version':'continuous-research-status.v1','forecasts':len(forecasts), 'pending':len(ids-valid),
+                'scored':len(latest),'scoredHistoricalTotal':len(scores),'validScored':len(valid),
+                'scoreRevisions':len(scores)-len(latest), 'currentlyUnavailable':len(set(latest) & unavailable),
+                'currentlyFeatureRevised':len(feature_revised),
                 'modelDiagnostics':journal_diagnostics(forecasts,scores,unavailable),
                 'genuineForward':sum(r['payload']['evidenceType']=='genuine-forward' for r in forecasts),
                 'boundary':dict(L.BOUNDARY)}
@@ -376,7 +385,8 @@ def registered_models(store):
 
 
 def availability_events(store):
-    latest={}
+    forecasts = {record['id']: record['payload'] for record in store.records('forecast')}
+    chains = {}
     for r in store.records('reference'):
         p=r['payload']
         if p.get('type')!='outcome-availability':
@@ -384,8 +394,25 @@ def availability_events(store):
         L._keys(p,{'type','forecastId','state','recordedAt','retrievedAt','datasetSha256','source','retention'})
         L._require(p['state'] in ('available','unavailable') and L._hash(p['forecastId']) and L._hash(p['datasetSha256']),'invalid-outcome-availability')
         L._require(timestamp(p['retrievedAt'])<=timestamp(p['recordedAt']),'availability-clock-reversed')
-        if p['forecastId'] not in latest or timestamp(latest[p['forecastId']]['payload']['recordedAt'])<timestamp(p['recordedAt']):
-            latest[p['forecastId']]=r
+        L._require(p['forecastId'] in forecasts, 'availability-forecast-missing')
+        forecast = forecasts[p['forecastId']]
+        L._require(p['source'] == forecast['source'] and p['retention'] == forecast['retention'],
+                   'availability-forecast-source-or-retention-mismatch')
+        chains.setdefault(p['forecastId'], []).append(r)
+    latest = {}
+    for forecast_id, chain in chains.items():
+        chain.sort(key=lambda record: (timestamp(record['payload']['recordedAt']), record['id']))
+        prior = None
+        for record in chain:
+            current = record['payload']
+            if prior is not None:
+                L._require(timestamp(prior['payload']['recordedAt']) < timestamp(current['recordedAt']),
+                           'availability-event-order-ambiguous')
+                L._require(prior['payload']['state'] != current['state'], 'availability-state-transition-invalid')
+            else:
+                L._require(current['state'] == 'unavailable', 'availability-restoration-without-withdrawal')
+            prior = record
+        latest[forecast_id] = prior
     return latest
 
 

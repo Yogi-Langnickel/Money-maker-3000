@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import learning as L
 from . import forward_evaluation as F
-from .research_cycle import EvidenceStore, freeze_protocol, import_learning_model, now, retention_check, run_experiment, load_observation_dataset
+from .research_cycle import EvidenceStore, freeze_protocol, import_learning_model, now, retention_check, run_experiment, load_observation_dataset, semantic_replay
 
 
 def contained(root: Path, relative: str) -> Path:
@@ -57,13 +57,14 @@ def coordinate(config_path: str | Path, *, mode: str = 'cycle', allow_synthetic:
     if config['portability'] is not None:
         from .portability import load_report
         try:
-            L._keys(config['portability'], {'reportPath','reportSources'})
+            L._keys(config['portability'], {'protocolPath','reportPath','reportSources'})
             sources=config['portability']['reportSources']
             L._require(type(sources) is list and len(sources)==2 and len(set(sources))==2, 'invalid-portability-source-pair')
             L._require(not any(source in source_policy_errors for source in sources),'portability-source-retention-conflict')
             current={source:source_policies[source] for source in sources if source in source_policies}
             L._require(set(current)==set(sources),'portability-current-source-attestation-missing')
-            full = load_report(config['portability']['reportPath'],current_retentions=current)
+            full = load_report(config['portability']['reportPath'], protocol_path=config['portability']['protocolPath'],
+                               current_retentions=current)
             portability_report = {'strategies':[{'strategy':x['strategy'],'verdict':x['verdict'],'reasons':x['reasons']} for x in full['strategies']], 'limitations':full['limitations']}
         except (ValueError,OSError,KeyError):
             portability_report = {'status':'inconclusive','reason':'portability-report-unavailable-or-retention-blocked'}
@@ -119,8 +120,9 @@ def coordinate(config_path: str | Path, *, mode: str = 'cycle', allow_synthetic:
                     with store.locked(read_only=True):
                         for model in store.records('model'):
                             F._eligible_model(model['payload'],manifest)
-                    results.append({'source':source,'symbol':symbol,'strategy':strategy,'action':'integrity-replay-no-recomputed-historical-metrics',
-                                    'experimentId':experiment['id'], **F.status(store,source=source,retention=entry['retention'])})
+                    semantic = semantic_replay(store,bars,manifest,experiment,retention=entry['retention'])
+                    results.append({'source':source,'symbol':symbol,'strategy':strategy,'action':'semantic-replay-verified-no-new-research',
+                                    **semantic, **F.status(store,source=source,retention=entry['retention'])})
                     continue
                 availability = config['availability'].get(source+'/'+symbol)
                 if availability:

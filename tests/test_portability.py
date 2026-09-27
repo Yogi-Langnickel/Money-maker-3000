@@ -20,13 +20,16 @@ def bars(source="alpha", size=700):
     return result
 
 
-def descriptor(source="alpha"):
+def descriptor(source="alpha", series=None, retrieved_at="2026-09-14T23:59:00Z"):
     values = {"instrument": "SPY-US-ETF", "currency": "USD", "session": "regular",
               "timestamps": "session-date", "priceType": "last-trade", "adjustments": "unadjusted",
               "costs": "no-transaction-cost-model"}
-    return {"version": "feed-description.v1", "source": source, "symbol": "SPY",
+    series = bars(source) if series is None else series
+    return {"version": "feed-description.v2", "source": source, "symbol": "SPY",
             "fields": {key: {"value": value, "status": "verified", "evidence": "synthetic-contract-only"}
                        for key, value in values.items()}, "retention": {"policy": "source-terms"},
+            "retrieval": {"retrievedAt": retrieved_at, "inputSeriesSha256": portability._series_digest(series),
+                          "evidence": "synthetic retrieval journal contract only"},
             "findings": [{"classification": "unresolved", "explanation": "small differences unresolved",
                           "evidence": "synthetic-contract-only"}]}
 
@@ -43,15 +46,19 @@ class PortabilityTests(unittest.TestCase):
             created_at="2026-09-14T00:00:00Z")
 
     def evaluate(self, a=None, b=None, da=None, db=None):
-        return portability.evaluate_pair(self.left if a is None else a, self.right if b is None else b,
-            descriptor() if da is None else da, descriptor("beta") if db is None else db,
+        left, right = self.left if a is None else a, self.right if b is None else b
+        return portability.evaluate_pair(left, right,
+            descriptor("alpha", left) if da is None else da, descriptor("beta", right) if db is None else db,
             self.path, as_of="2026-09-14")
 
-    def test_identical_inputs_same_model_transfer_unresolved_causes_allowed(self):
+    def test_identical_inputs_are_endpoint_complete_but_interval_unproven(self):
         report = self.evaluate()
         self.assertEqual(report["dailyMovements"]["directionAgreement"], 1)
+        self.assertEqual(report["reserveEndpointCoverage"]["status"], "complete")
+        self.assertEqual(report["reserveIntervalCompleteness"]["status"], "unproven")
         for strategy in report["strategies"]:
-            self.assertEqual(strategy["verdict"], "supported")
+            self.assertEqual(strategy["verdict"], "inconclusive")
+            self.assertIn("reserved-comparison-interval-completeness-unproven", strategy["reasons"])
             for direction in strategy["directions"]:
                 self.assertEqual(direction["sourceFitSha256"], direction["transferFitSha256"])
                 self.assertEqual(direction["transfer"]["stateAgreement"], 1)
@@ -61,12 +68,39 @@ class PortabilityTests(unittest.TestCase):
 
     def test_truncated_matching_feeds_do_not_complete_reserved_period(self):
         complete = self.evaluate()
-        self.assertEqual(complete["reserveCoverage"]["status"], "complete")
-        self.assertTrue(all(s["verdict"] == "supported" for s in complete["strategies"]))
+        self.assertEqual(complete["reserveEndpointCoverage"]["status"], "complete")
         truncated = self.evaluate(a=self.left[:-100], b=self.right[:-100])
-        self.assertEqual(truncated["reserveCoverage"]["status"], "incomplete")
-        self.assertTrue(all(s["verdict"] == "inconclusive" and "reserved-comparison-period-incomplete" in s["reasons"]
+        self.assertEqual(truncated["reserveEndpointCoverage"]["status"], "incomplete")
+        self.assertTrue(all(s["verdict"] == "inconclusive" and "reserved-comparison-endpoint-incomplete" in s["reasons"]
                             for s in truncated["strategies"]))
+
+    def test_one_sided_and_shared_interior_gaps_never_claim_complete_interval(self):
+        one_sided = self.evaluate(b=self.right[:500] + self.right[501:])
+        self.assertEqual(one_sided["reserveEndpointCoverage"]["status"], "complete")
+        self.assertEqual(one_sided["missingFromRight"], [self.right[500].date])
+        self.assertEqual(one_sided["reserveIntervalCompleteness"]["status"], "unproven")
+        self.assertTrue(all(item["verdict"] == "inconclusive" for item in one_sided["strategies"]))
+        shared = self.evaluate(a=self.left[:500] + self.left[501:], b=self.right[:500] + self.right[501:])
+        self.assertEqual(shared["reserveEndpointCoverage"]["status"], "complete")
+        self.assertEqual(shared["missingFromLeft"], [])
+        self.assertEqual(shared["missingFromRight"], [])
+        self.assertEqual(shared["reserveIntervalCompleteness"]["status"], "unproven")
+        self.assertTrue(all(item["verdict"] == "inconclusive" for item in shared["strategies"]))
+
+    def test_as_of_requires_non_future_retrieval_bound_to_the_input_digest(self):
+        left = descriptor("alpha", self.left, retrieved_at="2026-09-20T00:00:00Z")
+        right = descriptor("beta", self.right, retrieved_at="2026-09-20T00:00:00Z")
+        with self.assertRaisesRegex(learning.LearningError, "future-as-of"):
+            portability.evaluate_pair(self.left, self.right, left, right, self.path, as_of="2026-09-20",
+                                      clock=lambda: portability._timestamp("2026-09-19T00:00:00Z"))
+        left = descriptor("alpha", self.left, retrieved_at="2026-09-14T23:59:00Z")
+        right = descriptor("beta", self.right, retrieved_at="2026-09-14T23:59:00Z")
+        with self.assertRaisesRegex(learning.LearningError, "as-of-not-bound-to-retrieval"):
+            portability.evaluate_pair(self.left, self.right, left, right, self.path, as_of="2026-09-15",
+                                      clock=lambda: portability._timestamp("2026-09-20T00:00:00Z"))
+        left["retrieval"]["inputSeriesSha256"] = "a" * 64
+        with self.assertRaisesRegex(learning.LearningError, "invalid-retrieval-evidence"):
+            portability.evaluate_pair(self.left, self.right, left, right, self.path, as_of="2026-09-14")
 
     def test_non_session_end_requires_frozen_evidence_and_elapsed_reserve(self):
         path = self.path.parent/"calendar-end.json"
@@ -79,28 +113,28 @@ class PortabilityTests(unittest.TestCase):
             portability.freeze_protocol(path,**kwargs)
         portability.freeze_protocol(path,**kwargs,end_session_evidence="synthetic-calendar-contract-only")
         self.path=path
-        self.assertTrue(all(s["verdict"] == "supported" for s in self.evaluate()["strategies"]))
-        pending = portability.evaluate_pair(self.left,self.right,descriptor(),descriptor("beta"),path,as_of=last)
-        self.assertFalse(pending["reserveCoverage"]["evaluationPeriodElapsed"])
+        self.assertTrue(all(s["verdict"] == "inconclusive" for s in self.evaluate()["strategies"]))
+        pending = portability.evaluate_pair(self.left,self.right,descriptor("alpha", self.left),descriptor("beta", self.right),path,as_of=last)
+        self.assertFalse(pending["reserveEndpointCoverage"]["evaluationPeriodElapsed"])
         self.assertTrue(all(s["verdict"] == "inconclusive" for s in pending["strategies"]))
 
     def test_material_behaviour_divergence_rejected_when_meaning_and_samples_complete(self):
         changed = [Bar(b.symbol,b.date,b.open,b.high,b.low,b.close*(1.20 if i%2 else .80),b.volume,b.source)
                    if i>350 else b for i,b in enumerate(self.right)]
         report = self.evaluate(b=changed)
-        self.assertTrue(any(s["verdict"] == "rejected" for s in report["strategies"]))
+        self.assertTrue(all(s["verdict"] == "inconclusive" for s in report["strategies"]))
         self.assertTrue(any("returnDifferenceP95" in s["toleranceBreaches"] for s in report["strategies"]))
 
     def test_close_only_contract_preserves_absence(self):
         close_only = [Bar(b.symbol,b.date,None,None,None,b.close,None,b.source) for b in self.right]
         report = self.evaluate(b=close_only)
-        self.assertTrue(all(s["verdict"] == "supported" for s in report["strategies"]))
+        self.assertTrue(all(s["verdict"] == "inconclusive" for s in report["strategies"]))
         self.assertTrue(all(b.open is None for b in close_only))
 
     def test_unknown_costs_are_unused_context_and_do_not_block(self):
         desc = descriptor("beta")
         desc["fields"]["costs"]["status"] = "unresolved"
-        self.assertTrue(all(s["verdict"] == "supported" for s in self.evaluate(db=desc)["strategies"]))
+        self.assertTrue(all(s["verdict"] == "inconclusive" for s in self.evaluate(db=desc)["strategies"]))
 
     def test_reserve_prices_cannot_change_source_selection_or_fits(self):
         before = self.evaluate()
@@ -148,6 +182,7 @@ class PortabilityTests(unittest.TestCase):
             self.evaluate(a=fmp,da=desc)
         desc["retention"] = {"policy":"fmp-active-subscription-delete-within-30-days", "subscriptionStatus":"active",
                               "terminationDate":None}
+        desc["retrieval"]["inputSeriesSha256"] = portability._series_digest(fmp)
         report = self.evaluate(a=fmp,da=desc)
         self.assertIn("hashes-models-and-mixed-reports",report["retentionScope"])
         desc["retention"]["subscriptionStatus"] = "terminated"
@@ -186,10 +221,55 @@ class PortabilityTests(unittest.TestCase):
     def test_report_read_checks_current_retention_before_data_access(self):
         with patch("money_maker_3000.learning._read") as reader:
             with self.assertRaisesRegex(learning.LearningError,"inactive-delete"):
-                portability.load_report("unused",current_retentions={"fmp-eod-unadjusted":{
+                portability.load_report("unused",protocol_path="unused-protocol",current_retentions={"fmp-eod-unadjusted":{
                     "policy":"fmp-active-subscription-delete-within-30-days", "subscriptionStatus":"terminated",
                     "terminationDate":"2026-09-13"}})
             reader.assert_not_called()
+
+    def test_completed_report_is_sealed_and_rejects_tampered_verdicts(self):
+        report = self.evaluate()
+        target = self.path.parent / "report.json"
+        portability.write_report(report, target)
+        loaded = portability.load_report(target, protocol_path=self.path, current_retentions={"alpha": {"policy": "source-terms"},
+                                                                      "beta": {"policy": "source-terms"}})
+        self.assertIn("sha256", loaded)
+        changed = __import__("json").loads(target.read_text())
+        changed["strategies"][0]["verdict"] = "supported" if changed["strategies"][0]["verdict"] != "supported" else "rejected"
+        target.write_text(__import__("json").dumps(changed))
+        with self.assertRaisesRegex(learning.LearningError, "report-checksum-mismatch"):
+            portability.load_report(target, protocol_path=self.path, current_retentions={"alpha": {"policy": "source-terms"},
+                                                                 "beta": {"policy": "source-terms"}})
+        malformed = __import__("json").loads(__import__("json").dumps(loaded))
+        malformed["reserveEndpointCoverage"] = "fabricated"
+        malformed["sha256"] = learning._digest({key: value for key, value in malformed.items() if key != "sha256"})
+        target.write_text(__import__("json").dumps(malformed))
+        with self.assertRaisesRegex(learning.LearningError, "portability-invalid-report"):
+            portability.load_report(target, protocol_path=self.path, current_retentions={"alpha": {"policy": "source-terms"},
+                                                                 "beta": {"policy": "source-terms"}})
+        inconsistent_coverage = __import__("json").loads(__import__("json").dumps(loaded))
+        inconsistent_coverage["reserveEndpointCoverage"]["evaluationPeriodElapsed"] = False
+        inconsistent_coverage["reserveEndpointCoverage"]["status"] = "incomplete"
+        inconsistent_coverage["sha256"] = learning._digest({key: value for key, value in inconsistent_coverage.items() if key != "sha256"})
+        target.write_text(__import__("json").dumps(inconsistent_coverage))
+        with self.assertRaisesRegex(learning.LearningError, "reserve-coverage-mismatch"):
+            portability.load_report(target, protocol_path=self.path, current_retentions={"alpha": {"policy": "source-terms"},
+                                                                 "beta": {"policy": "source-terms"}})
+        insufficient = __import__("json").loads(__import__("json").dumps(loaded))
+        insufficient["strategies"][0]["directions"] = [
+            {"from": "alpha", "to": "beta", "status": "insufficient-source-development-history"},
+            {"from": "beta", "to": "alpha", "status": "insufficient-source-development-history"}]
+        insufficient["sha256"] = learning._digest({key: value for key, value in insufficient.items() if key != "sha256"})
+        target.write_text(__import__("json").dumps(insufficient))
+        with self.assertRaisesRegex(learning.LearningError, "verdict-contract-mismatch"):
+            portability.load_report(target, protocol_path=self.path, current_retentions={"alpha": {"policy": "source-terms"},
+                                                                 "beta": {"policy": "source-terms"}})
+        blank_directions = __import__("json").loads(__import__("json").dumps(loaded))
+        blank_directions["strategies"][0]["directions"] = [{}, {}]
+        blank_directions["sha256"] = learning._digest({key: value for key, value in blank_directions.items() if key != "sha256"})
+        target.write_text(__import__("json").dumps(blank_directions))
+        with self.assertRaisesRegex(learning.LearningError, "portability-invalid-report"):
+            portability.load_report(target, protocol_path=self.path, current_retentions={"alpha": {"policy": "source-terms"},
+                                                                 "beta": {"policy": "source-terms"}})
 
     def test_active_state_at_reserve_start_is_not_a_new_trigger(self):
         protocol = portability.load_protocol(self.path)

@@ -10,9 +10,17 @@ The configured command is `python3.13 -m money_maker_3000.cli research-cycle
 --config <private-config.json>` with `PYTHONPATH=src`. The short Money Maker skill
 uses the configured cycle automatically, retaining the previous fixed-split
 workflow through `--legacy`. `research-status` reads existing status without
-creating a store; `research-replay` verifies immutable record digests and model
-contracts against the original dataset version without recomputing historical
-metrics. The existing learner's verified replay remains available separately.
+creating a store; `research-replay` verifies immutable record digests and
+semantically recomputes the frozen candidate ranking, fitted models, and
+reserved classification diagnostics against the original dataset version. It
+does not create records, select a successor, or make a trading or profitability
+claim. When an existing incumbent is imported, replay also binds its original
+context-free model digest (strategy, fit, source, training provenance and other
+substantive fields) and the frozen protocol, manifest, retention, context, and
+reserved diagnostics before accepting it. The successor's protocol/freeze/
+retention/interpretation context is intentionally fresh. Replay holds one
+read-only journal snapshot throughout recomputation. The existing learner's
+verified replay remains available separately.
 
 ## Frozen research
 
@@ -95,7 +103,7 @@ research can continue.
 `profilePath`, `outputRoot`, `retention`, `interpretations`, and `symbols`.
 Its rights and exact interpretation preflight runs before credential access.
 There is no arbitrary command or executable hook. `portability` is null or
-`{"reportPath": "<private saved portability report>", "reportSources": ["source-a", "source-b"]}`. The workflow loads it
+`{"protocolPath": "<private frozen portability protocol>", "reportPath": "<private saved portability report>", "reportSources": ["source-a", "source-b"]}`. The workflow loads it
 only with current inventory retention attestations for exactly those two sources. Status and replay never
 collect. Partial source access is reported explicitly.
 
@@ -210,8 +218,10 @@ explicitly unavailable. Collector snapshots retain original rows but carry
 cumulative `unresolvedMissingDates`; the adapter excludes those observations
 from current research and forwards the withdrawal overlay to scoring. Only an
 explicit provider return clears a collector withdrawal. Status distinguishes
-`scoredHistoricalTotal`, `validScored`, `pending`, and `currentlyUnavailable`;
-withdrawn/revised feature evidence is excluded from active diagnostic metrics.
+`scored` (current score revisions), `scoredHistoricalTotal` (all append-only
+revisions), `validScored`, `pending`, `currentlyUnavailable`, and
+`currentlyFeatureRevised`; feature-revised evidence remains pending and is
+excluded from active diagnostic metrics.
 Checkpoint revisions report `fixedDateCount` and `currentEligiblePairs`, and a
 retry repairs an interrupted reference update without reevaluating the outcome.
 

@@ -198,6 +198,14 @@ def _fit(states: list[str], labels: list[int], strategy: str) -> dict[str, Any]:
 
 
 def _score(probabilities: list[float], labels: list[int]) -> float:
+    # zip() silently truncates.  A score is evidence only when every forecast
+    # has exactly one binary outcome, so reject malformed caller input before
+    # computing a diagnostic.
+    _require(type(probabilities) is list and type(labels) is list and bool(labels)
+             and len(probabilities) == len(labels), "invalid-learning-score-input")
+    _require(all(_number(probability) for probability in probabilities)
+             and all(type(label) is int and label in (0, 1) for label in labels),
+             "invalid-learning-score-input")
     result = math.fsum((p - y) ** 2 for p, y in zip(probabilities, labels)) / len(labels)
     _require(_number(result), "invalid-learning-metric")
     return result
