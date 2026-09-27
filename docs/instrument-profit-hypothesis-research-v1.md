@@ -85,5 +85,5 @@ PYTHONPATH=src python3.13 -m money_maker_3000.cli profit-hypothesis \
 Do not pass a provider URL, credential, account data or execution option: none
 is accepted. For a frozen cross-instrument check, use `profit-hypothesis-retest`
 with the saved report and a new local-candle config; it rejects a `retune` flag.
-Use `profit-hypothesis-replay --report <report.json> --config <config.json>`
+Use `profit-hypothesis-replay --report <report.json> --config <config.json> --evidence-root <evidence-root>`
 to verify an existing run without writing evidence.

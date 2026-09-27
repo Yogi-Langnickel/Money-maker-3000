@@ -362,6 +362,13 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
         if isinstance(exc, HypothesisError):
             raise
         raise HypothesisError(code) from None
+    except ValueError as exc:
+        # The eToro retention gate keeps its controlled collector exception at
+        # the collection boundary. Normalize only that value-blind type here.
+        if type(exc).__name__ != "CollectionError" or type(exc).__module__ != "money_maker_3000.feed_collection":
+            raise
+        _failure_artifact(evidence_root, config, "hypothesis-observed-gate-rejected")
+        raise HypothesisError("hypothesis-observed-gate-rejected") from None
     if primary not in dataset["intervals"]:
         _failure_artifact(evidence_root, config, "hypothesis-primary-interval-missing"); raise HypothesisError("hypothesis-primary-interval-missing")
     if not dataset["overlap"]["usable"]:

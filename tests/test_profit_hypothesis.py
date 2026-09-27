@@ -168,6 +168,16 @@ class ProfitHypothesisTests(unittest.TestCase):
                 P.run(denied, evidence_root=Path(root))
             failed = list(Path(root).glob("*/failed-run.json"))
             self.assertEqual(len(failed), 1)
+        with tempfile.TemporaryDirectory() as root:
+            etoro = config(); etoro["classification"] = "observed-attested"
+            etoro["instrument"] = {**etoro["instrument"], "source": "etoro"}
+            for series in etoro["datasets"].values():
+                for candle in series:
+                    candle["provenance"]["source"] = "etoro"
+            etoro["retention"] = {"policy": "source-terms"}
+            with self.assertRaisesRegex(P.HypothesisError, "observed-gate-rejected"):
+                P.run(etoro, evidence_root=Path(root))
+            self.assertEqual(len(list(Path(root).glob("*/failed-run.json"))), 1)
         weekend = config(); weekend["classification"] = "observed-attested"
         weekend["instrument"] = {**weekend["instrument"], "source": "fmp-eod"}
         weekend["retention"] = {"policy": R.FMP_POLICY, "subscriptionStatus": "active", "terminationDate": None}
