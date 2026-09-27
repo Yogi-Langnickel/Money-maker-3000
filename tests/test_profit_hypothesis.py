@@ -136,10 +136,16 @@ class ProfitHypothesisTests(unittest.TestCase):
         report = {"version": P.VERSION, "frozen": {"instrument": config()["instrument"]}, "trials": [{"grade": "weak", "hypothesis": P.frozen_hypotheses(10)[0]}]}
         report["sha256"] = P._digest(report)
         other = config(); other["instrument"] = {**other["instrument"], "symbol": "QQQ"}
-        retest = P.frozen_retest(report, other, allow_synthetic_smoke=True)
-        self.assertTrue(retest["frozenRuleRetest"])
-        self.assertEqual(retest["originalReportSha256"], report["sha256"])
-        self.assertIn("dataset", retest["frozen"])
+        with tempfile.TemporaryDirectory() as root:
+            retest = P.frozen_retest(report, other, evidence_root=Path(root), allow_synthetic_smoke=True)
+            self.assertTrue(retest["frozenRuleRetest"])
+            self.assertEqual(retest["originalReportSha256"], report["sha256"])
+            self.assertEqual(retest["sha256"], P._digest({key: value for key, value in retest.items() if key != "sha256"}))
+            stored = __import__("json").loads((Path(root) / retest["sha256"] / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(stored, retest)
+            self.assertEqual(stored["originalReportSha256"], report["sha256"])
+            self.assertTrue(stored["frozenRuleRetest"])
+            self.assertIn("dataset", retest["frozen"])
 
     def test_observed_data_requires_existing_source_rights_gates(self):
         observed = config(); observed["classification"] = "observed-attested"

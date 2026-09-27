@@ -311,7 +311,8 @@ def _attempt_count(root: Path | None, config_sha256: str) -> int:
 
 
 def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synthetic_smoke: bool = False,
-        frozen_rules: list[dict[str, Any]] | None = None, retained_attempt_count: int | None = None) -> dict[str, Any]:
+        frozen_rules: list[dict[str, Any]] | None = None, retained_attempt_count: int | None = None,
+        report_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         _require(config.get("classification") in ("synthetic", "observed-attested"), "hypothesis-invalid-classification")
         _require(config.get("classification") != "synthetic" or allow_synthetic_smoke, "hypothesis-synthetic-smoke-opt-in-required")
@@ -357,9 +358,15 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
     config_sha256 = _digest(config)
     frozen = {"version": VERSION, "instrument": config["instrument"], "primaryInterval": primary, "dataset": {key: {field: value[field] for field in ("sha256", "count", "coverage")} for key, value in dataset["intervals"].items()},
               "overlap": dataset["overlap"], "timeframeAlignment": {"primary": primary, "roles": {name: ("primary" if name == primary else "higher-confirmation" if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary] else "lower-coverage-only") for name in dataset["intervals"]}, "eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptConfigSha256": config_sha256, "attemptedTrials": len(trials), "retainedAttemptCount": retained_attempt_count if retained_attempt_count is not None else _attempt_count(evidence_root, config_sha256), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
+    _require(report_metadata is None or type(report_metadata) is dict and set(report_metadata) == {"frozenRuleRetest", "originalReportSha256"}
+             and report_metadata["frozenRuleRetest"] is True and type(report_metadata["originalReportSha256"]) is str
+             and len(report_metadata["originalReportSha256"]) == 64 and all(char in "0123456789abcdef" for char in report_metadata["originalReportSha256"]),
+             "hypothesis-invalid-report-metadata")
     report = {"version": VERSION, "simulated": True, "operationalStatus": "offline-research-complete", "validationStage": "untouched-chronological-evaluation", "frozen": frozen,
               "trials": trials, "limitation": "Synthetic fixtures prove mechanics only; no empirical profitability has been demonstrated." if config["classification"] == "synthetic" else "Observed-attested local data still does not establish future profitability.",
               "boundary": {"providerCalls": "blocked", "executionRoutes": "absent", "longOnly": True, "leverage": 1, "profitPromise": "absent"}}
+    if report_metadata is not None:
+        report.update(report_metadata)
     report["sha256"] = _digest(report)
     if evidence_root is not None:
         store = ArtifactStore(evidence_root / report["sha256"])
@@ -380,8 +387,8 @@ def frozen_retest(report: dict[str, Any], config: dict[str, Any], *, evidence_ro
     permitted = [trial["hypothesis"] for trial in report.get("trials", []) if trial.get("grade") in ("weak", "strong")]
     _require(permitted, "hypothesis-no-weak-or-strong-candidate")
     copied = dict(config); copied["costBps"] = permitted[0]["costBps"]
-    outcome = run(copied, evidence_root=evidence_root, allow_synthetic_smoke=allow_synthetic_smoke, frozen_rules=permitted)
-    return {**outcome, "frozenRuleRetest": True, "originalReportSha256": report["sha256"]}
+    return run(copied, evidence_root=evidence_root, allow_synthetic_smoke=allow_synthetic_smoke, frozen_rules=permitted,
+               report_metadata={"frozenRuleRetest": True, "originalReportSha256": report["sha256"]})
 
 
 def replay(report: dict[str, Any], config: dict[str, Any], *, allow_synthetic_smoke: bool = False) -> dict[str, Any]:
