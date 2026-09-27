@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import learning as L
+from . import signal_toolkit as S
 
 VERSION = 'continuous-research.v1'
 HORIZON = 5
@@ -165,12 +166,17 @@ def incumbent_provenance(incumbent: dict) -> dict:
     and interpretation.  Those contextual fields are intentionally rewritten
     on import and therefore cannot identify the predecessor model.
     """
+    # Optional toolkit bindings describe the successor protocol context, not
+    # the predecessor's semantic identity.  Leaving them here makes a legacy
+    # predecessor appear to have changed when its successor adds a toolkit.
     return {key: value for key, value in incumbent.items()
-            if key not in ('protocolId', 'frozenAt', 'retention', 'interpretation')}
+            if key not in ('protocolId', 'frozenAt', 'retention', 'interpretation',
+                           'signalFeatureBundleSha256', 'signalFeaturePolicy')}
 
 
 def freeze_protocol(bars: list, manifest: dict, strategy: str, retention: dict,
-                    interpretation: dict, *, created_at: str | None = None, incumbent_model: dict | None = None) -> dict:
+                    interpretation: dict, *, created_at: str | None = None, incumbent_model: dict | None = None,
+                    signal_toolkit: dict | None = None) -> dict:
     retention_check(manifest['source'], retention)
     validate_history(bars, manifest)
     grid = L.candidate_grid(strategy)
@@ -182,7 +188,7 @@ def freeze_protocol(bars: list, manifest: dict, strategy: str, retention: dict,
                and n - cuts[-1] >= 16, 'insufficient-three-window-history')
     validate_interpretation(interpretation)
     L._require(interpretation['trainingPermitted'] is True and interpretation['instrumentVerified'] is True, 'source-not-approved-for-training')
-    return {'version': VERSION, 'createdAt': created_at or now(), 'datasetSha256': manifest['sha256'],
+    result = {'version': VERSION, 'createdAt': created_at or now(), 'datasetSha256': manifest['sha256'],
             'rowsSha256': L._digest([bar.to_dict() for bar in bars]), 'manifest': manifest,
             'retention': retention, 'interpretation': interpretation, 'strategy': strategy,
             'featureVersion': 'registry-history-state.v1', 'horizonObservations': HORIZON,
@@ -195,6 +201,15 @@ def freeze_protocol(bars: list, manifest: dict, strategy: str, retention: dict,
                 'minimumUsefulImprovement': .005, 'blockLength': 5, 'bootstrapReplicates': 2000,
                 'confidence': .95, 'maxComparisons': 2, 'maxReplacements': 1, 'maxChallengers': 2},
             'boundary': dict(L.BOUNDARY)}
+    if signal_toolkit is not None:
+        L._keys(signal_toolkit, {'ohlcAttested', 'ohlcBasis', 'completedAt', 'availableAt'})
+        L._require(type(signal_toolkit['ohlcAttested']) is bool and (signal_toolkit['ohlcBasis'] is None or type(signal_toolkit['ohlcBasis']) is str), 'invalid-signal-toolkit-config')
+        # Completion and source availability are deliberately distinct full UTC facts.
+        L._require(timestamp(signal_toolkit['completedAt']) <= timestamp(signal_toolkit['availableAt']) <= timestamp(result['createdAt']), 'signal-availability-after-protocol-freeze')
+        rows = [{**bar.to_dict(), 'end': bar.date + 'T00:00:00Z'} for bar in bars]
+        result['signalFeatureBundle'] = S.freeze_feature_bundle(rows, completed_at=signal_toolkit['completedAt'], available_at=signal_toolkit['availableAt'],
+                                                                ohlc_attested=signal_toolkit['ohlcAttested'], ohlc_basis=signal_toolkit['ohlcBasis'])
+    return result
 
 
 def validate_interpretation(value: dict) -> None:
@@ -262,6 +277,9 @@ def _frozen_candidate_model(bars, manifest, protocol, index, warmup, reserved, *
              'horizonObservations': HORIZON, 'protocolId': protocol['_id'], 'retention': protocol['retention'],
              'interpretation': protocol['interpretation'], 'featureVersion': protocol['featureVersion'],
              'frozenAt': protocol['createdAt'], 'trainingDatasetSha256': protocol['datasetSha256']}
+    if 'signalFeatureBundle' in protocol:
+        model['signalFeatureBundleSha256'] = protocol['signalFeatureBundle']['sha256']
+        model['signalFeaturePolicy'] = dict(protocol['signalFeatureBundle']['ohlcPolicy'])
     return model, result, labels
 
 
@@ -271,8 +289,9 @@ def run_experiment(store: EvidenceStore, bars: list, protocol: dict, *, incumben
     validate_history(bars, protocol['manifest'])
     L._require(L._digest([bar.to_dict() for bar in bars]) == protocol['rowsSha256'], 'protocol-dataset-changed')
     # Reconstruct all fixed rules; only the creation timestamp is caller supplied.
+    signal_config = None if 'signalFeatureBundle' not in protocol else {'ohlcAttested': protocol['signalFeatureBundle']['ohlcPolicy']['attested'], 'ohlcBasis': protocol['signalFeatureBundle']['ohlcPolicy']['basis'], 'completedAt': protocol['signalFeatureBundle']['completedAt'], 'availableAt': protocol['signalFeatureBundle']['availableAt']}
     expected = freeze_protocol(bars, protocol['manifest'], protocol['strategy'], protocol['retention'],
-                               protocol['interpretation'], created_at=protocol['createdAt'], incumbent_model=incumbent)
+                               protocol['interpretation'], created_at=protocol['createdAt'], incumbent_model=incumbent, signal_toolkit=signal_config)
     L._require(protocol == expected, 'protocol-rules-changed')
     timestamp(protocol['createdAt'])
     store.authorize(protocol['manifest']['source'],protocol['retention'],create=True)
@@ -331,6 +350,9 @@ def run_experiment(store: EvidenceStore, bars: list, protocol: dict, *, incumben
             existing, _ = _evaluate(bars,reserved,strategy,incumbent['parameters'],incumbent['fit'],deadline,cache)
             imported = dict(incumbent, protocolId=frozen['id'], frozenAt=protocol['createdAt'],
                             retention=protocol['retention'], interpretation=protocol['interpretation'])
+            if 'signalFeatureBundle' in protocol:
+                imported['signalFeatureBundleSha256'] = protocol['signalFeatureBundle']['sha256']
+                imported['signalFeaturePolicy'] = dict(protocol['signalFeatureBundle']['ohlcPolicy'])
             imported_record = store.put('model', imported)
             model_ids.add(imported_record['id'])
             models.append({'id':imported_record['id'], 'candidateIndex':None, 'role':'incumbent',
@@ -427,9 +449,10 @@ def _semantic_replay_locked(store: EvidenceStore, bars: list, manifest: dict, ex
         incumbent_id = imported[0]['id']
         L._require(incumbent_id in models, 'semantic-replay-model-missing')
         incumbent = incumbent_provenance(models[incumbent_id])
+    signal_config = None if 'signalFeatureBundle' not in protocol else {'ohlcAttested': protocol['signalFeatureBundle']['ohlcPolicy']['attested'], 'ohlcBasis': protocol['signalFeatureBundle']['ohlcPolicy']['basis'], 'completedAt': protocol['signalFeatureBundle']['completedAt'], 'availableAt': protocol['signalFeatureBundle']['availableAt']}
     expected_protocol = freeze_protocol(
         bars, manifest, strategy, retention, protocol['interpretation'],
-        created_at=protocol['createdAt'], incumbent_model=incumbent)
+        created_at=protocol['createdAt'], incumbent_model=incumbent, signal_toolkit=signal_config)
     L._require(protocol == expected_protocol, 'semantic-replay-protocol-mismatch')
     bound_protocol = {**protocol, '_id': payload['protocolId']}
     cache = {}
@@ -481,6 +504,9 @@ def _semantic_replay_locked(store: EvidenceStore, bars: list, manifest: dict, ex
             original = incumbent_provenance(model)
             expected = {**original, 'protocolId': payload['protocolId'], 'frozenAt': protocol['createdAt'],
                         'retention': protocol['retention'], 'interpretation': protocol['interpretation']}
+            if 'signalFeatureBundle' in protocol:
+                expected['signalFeatureBundleSha256'] = protocol['signalFeatureBundle']['sha256']
+                expected['signalFeaturePolicy'] = dict(protocol['signalFeatureBundle']['ohlcPolicy'])
             L._require(model == expected and L._digest(original) == protocol['incumbentModelSha256']
                        and reference['role'] == 'incumbent' and reference['reservedMetrics'] == result
                        and payload['existingIncumbentMetrics'] == result,
@@ -554,7 +580,9 @@ def validate_model_schema(model: dict) -> None:
     keys = {'version','strategy','parameters','fit','symbol','source','priceBasis','classification','trainingEnd',
             'selectionEnd','knownHistoryEnd','horizonObservations','featureVersion','trainingDatasetSha256',
             'retention','interpretation','protocolId','frozenAt'}
-    L._keys(model,keys | ({'importedArtifactSha256'} if 'importedArtifactSha256' in model else set()))
+    extra = ({'importedArtifactSha256'} if 'importedArtifactSha256' in model else set()) | ({'signalFeatureBundleSha256', 'signalFeaturePolicy'} if 'signalFeatureBundleSha256' in model or 'signalFeaturePolicy' in model else set())
+    L._require(('signalFeatureBundleSha256' in model) == ('signalFeaturePolicy' in model), 'incomplete-signal-feature-model-binding')
+    L._keys(model,keys | extra)
     L._require(model['version'] == VERSION and model['featureVersion'] == 'registry-history-state.v1'
                and model['horizonObservations'] == HORIZON, 'unsupported-model-contract')
     L._require(model['parameters'] in L.candidate_grid(model['strategy']), 'unfrozen-model-parameters')
@@ -567,9 +595,10 @@ def validate_model_schema(model: dict) -> None:
 
 def validate_record_payload(kind: str, payload: dict) -> None:
     if kind == 'protocol':
-        L._keys(payload,{'version','createdAt','datasetSha256','rowsSha256','manifest','retention','interpretation',
+        protocol_keys = {'version','createdAt','datasetSha256','rowsSha256','manifest','retention','interpretation',
             'strategy','featureVersion','horizonObservations','incumbentModelSha256','candidates','maxConfigurationsPerFamily',
-            'runtimeSeconds','developmentCutoffs','reservedStart','selectionRule','evaluationContext','checkpointPolicy','boundary'})
+            'runtimeSeconds','developmentCutoffs','reservedStart','selectionRule','evaluationContext','checkpointPolicy','boundary'}
+        L._keys(payload, protocol_keys | ({'signalFeatureBundle'} if 'signalFeatureBundle' in payload else set()))
         L._require(payload['version'] == VERSION and payload['horizonObservations'] == HORIZON
                    and payload['runtimeSeconds'] == 120 and payload['maxConfigurationsPerFamily'] == 24
                    and payload['candidates'] == L.candidate_grid(payload['strategy']), 'protocol-contract-drift')
@@ -583,6 +612,8 @@ def validate_record_payload(kind: str, payload: dict) -> None:
         L._require(type(dates) is list and len(dates)==4 and dates==sorted(set(dates)), 'invalid-development-dates')
         L._require(all(L._iso(d) for d in dates) and dates[-1]<L._iso(payload['reservedStart']), 'invalid-reserved-date')
         timestamp(payload['createdAt'])
+        if 'signalFeatureBundle' in payload:
+            S.validate_feature_bundle(payload['signalFeatureBundle'])
         L._require(payload['boundary']==L.BOUNDARY and payload['evaluationContext']=='retrospective-known-history', 'research-boundary-changed')
     elif kind == 'model':
         validate_model_schema(payload)

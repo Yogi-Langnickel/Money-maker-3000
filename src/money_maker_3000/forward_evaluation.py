@@ -6,6 +6,7 @@ import random
 from datetime import timedelta
 
 from . import learning as L
+from . import signal_toolkit as S
 from .research_cycle import EvidenceStore, HORIZON, metrics, now, retention_check, timestamp, validate_history, validate_interpretation, validate_model_schema
 
 
@@ -62,6 +63,15 @@ def record_predictions(store: EvidenceStore, bars: list, manifest: dict, model_i
                         'originalFeatureRowsSha256':original['payload']['featureRowsSha256'],
                         'revisedFeatureRowsSha256':feature_hash, 'datasetSha256':manifest['sha256'],
                         'source':manifest['source'], 'retention':retention, 'probabilityUnchanged':True})
+                if 'signalFeatureBundleSha256' in original['payload']:
+                    rows = [{**bar.to_dict(), 'end': bar.date + 'T00:00:00Z'} for bar in bars]
+                    current = S.freeze_feature_bundle(rows, completed_at=completed_at, available_at=retrieved_at,
+                                                      ohlc_attested=model['signalFeaturePolicy']['attested'], ohlc_basis=model['signalFeaturePolicy']['basis'])
+                    if current['sha256'] != original['payload']['signalFeatureBundleSha256']:
+                        store.put('reference', {'type':'forecast-signal-feature-revision', 'forecastId':original['id'],
+                            'originalSignalFeatureBundleSha256':original['payload']['signalFeatureBundleSha256'],
+                            'revisedSignalFeatureBundleSha256':current['sha256'], 'datasetSha256':manifest['sha256'],
+                            'source':manifest['source'], 'retention':retention, 'probabilityUnchanged':True})
                 records.append(original['id']); reused += 1; continue
             state = L._state(bars,len(bars)-1,model['strategy'],model['parameters'])
             support = model['fit']['states'][state]
@@ -78,6 +88,12 @@ def record_predictions(store: EvidenceStore, bars: list, manifest: dict, model_i
                        'priorProbabilityUp': model['fit']['priorProbabilityUp'], 'usesPrior': support['usesPrior'],
                        'evidenceType': 'genuine-forward' if genuine else 'historical-replay',
                        'retention': retention, 'boundary': dict(L.BOUNDARY)}
+            if 'signalFeatureBundleSha256' in model:
+                rows = [{**bar.to_dict(), 'end': bar.date + 'T00:00:00Z'} for bar in bars]
+                current = S.freeze_feature_bundle(rows, completed_at=completed_at, available_at=retrieved_at,
+                                                  ohlc_attested=model['signalFeaturePolicy']['attested'], ohlc_basis=model['signalFeaturePolicy']['basis'])
+                payload['signalFeatureBundleSha256'] = current['sha256']
+                payload['signalFeatureModelBundleSha256'] = model['signalFeatureBundleSha256']
             records.append(store.put('forecast',payload)['id'])
         return {'created': len(records)-reused, 'reused': reused, 'forecastIds': records}
 
@@ -420,11 +436,15 @@ def validate_forward_journal(store):
     models=registered_models(store)
     forecasts={r['id']:r['payload'] for r in store.records('forecast')}
     for f in forecasts.values():
-        L._keys(f, {'version','modelId','createdAt','retrievedAt','completedAt','source','symbol','asOfDate',
+        keys = {'version','modelId','createdAt','retrievedAt','completedAt','source','symbol','asOfDate',
             'horizonObservations','datasetSha256','featureRowsSha256','originClose','state','probabilityUp',
-            'priorProbabilityUp','usesPrior','evidenceType','retention','boundary'})
+            'priorProbabilityUp','usesPrior','evidenceType','retention','boundary'}
+        bound = 'signalFeatureBundleSha256' in f or 'signalFeatureModelBundleSha256' in f
+        L._require(not bound or ('signalFeatureBundleSha256' in f and 'signalFeatureModelBundleSha256' in f), 'incomplete-forecast-signal-binding')
+        L._keys(f, keys | ({'signalFeatureBundleSha256','signalFeatureModelBundleSha256'} if bound else set()))
         L._require(f['modelId'] in models and f['version']=='forward-prediction.v1' and f['horizonObservations']==HORIZON, 'orphan-or-invalid-forecast')
         m=models[f['modelId']]
+        L._require((not bound and 'signalFeatureBundleSha256' not in m) or (L._hash(f.get('signalFeatureBundleSha256')) and f.get('signalFeatureModelBundleSha256') == m.get('signalFeatureBundleSha256')), 'forecast-signal-feature-binding-mismatch')
         L._require(f['source']==m['source'] and f['symbol']==m['symbol'] and f['asOfDate']>m['selectionEnd'], 'forecast-model-mismatch')
         fit=m['fit']['states'].get(f['state'])
         L._require(fit is not None and f['probabilityUp']==fit['probabilityUp'] and f['usesPrior']==fit['usesPrior']

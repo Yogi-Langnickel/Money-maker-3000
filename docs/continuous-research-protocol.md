@@ -3,6 +3,10 @@
 This workflow evaluates forecast probabilities and strategy states. It cannot
 create orders, change balances, or provide profitability evidence. All historical
 results, including the previously inspected holdout, are retrospective evidence.
+The separate Instrument Profit Hypothesis Research v1 workflow may report
+explicitly labelled *simulated* P&L, drawdown and costs as bounded offline
+research diagnostics. That exception does not permit a real-P&L claim,
+prediction, execution, account access, collection, or future-profit assertion.
 Cross-provider agreement supports robustness to data-source choice. The providers
 observe the same market events; agreement is not independent predictive evidence.
 

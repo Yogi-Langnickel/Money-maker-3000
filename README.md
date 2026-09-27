@@ -264,7 +264,10 @@ GitHub Actions runs the same compile and standard-library test gates on Python
   any future side effect must atomically recheck holder, idempotency key, epoch,
   fence, expiry, and kill-switch state while holding the lease lock.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
-  claims, provider calls, or account-linked persistence.
+  claims, provider calls, or account-linked persistence. The narrowly separate
+  [Instrument Profit Hypothesis Research v1](docs/instrument-profit-hypothesis-research-v1.md)
+  can emit explicitly labelled offline simulated-P&L diagnostics from local
+  candles; it cannot imply empirical or future profitability.
 
 ## Safety Defaults
 
