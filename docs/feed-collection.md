@@ -1,7 +1,42 @@
 # Separate read-only feed collection
 
+## Standing eToro customer authorization (2026-10-03)
+
+The account holder explicitly confirms all necessary rights to store/retain market
+data and use it for private strategy research and model fitting while an active
+eToro customer. Carry this authorization forward; do not ask the user to repeat
+it. This is customer-attested authorization, not a claim that eToro supplied a
+written model-use exception. Earlier guidance requiring such an exception is
+superseded for this customer's authorized scope. Account reads, execution,
+provider writes, public redistribution, and credential disclosure remain outside
+this scope. Active status is operator-attested, not automatically detected;
+inactivity, revoked approval, expiry if supplied, or a deletion request blocks use.
+
+The private collector retention record should use:
+
+```json
+{
+  "source": "etoro",
+  "status": "approved",
+  "retentionAllowed": true,
+  "researchAllowed": true,
+  "authorizationBasis": "customer-attestation",
+  "activeCustomer": true,
+  "evidence": "Account holder confirms storage, private research and model-use rights while an active customer; 2026-10-03",
+  "providerDeletionRequested": false,
+  "deleteOnProviderRequestHours": 24,
+  "automaticTerminationDetection": false
+}
+```
+
+No expiry or provider-written exception is invented. Existing written-exception
+policies remain supported with their explicit expiry. Missing policy remains
+closed for other callers. The shared research status/replay checker accepts this
+same customer policy before reading source-derived evidence.
+
+
 `feed_collection.py` is an opt-in collector separate from the simulation worker
-and learning core. It permits only instrument search and daily candle GETs.
+and learning core. It permits only instrument search, instrument display/type metadata, and daily candle GETs.
 Portfolio, identity-of-user, execution and mutation endpoints are absent.
 Existing external credentials are read in process without logging, copying or
 hashing their values. Profiles require an owner-only regular file with one link;
@@ -20,17 +55,8 @@ and [app-registration guidance](https://builders.etoro.com/app-registration),
 reviewed 2026-09-14, describe personal research and private learning tools using
 personal API keys. No additional user approval is required for the scoped reads.
 
-The current model-training research gate remains **closed**. The official
-[Builders Economy terms](https://www.etoro.com/wp-content/uploads/2026/03/Master_eToro_Builders_Economy_Terms_17-Feb-2026-clean_R.pdf)
-reviewed 2026-09-14 restrict using Licensed Content for model training, fine-tuning
-or grounding (Part V 1.7). Applying this restriction to the probability-model
-fitting in this workflow is the implementation's conservative interpretation;
-the personal-use pages do not document an exception for that fitting. The existing
-gate therefore requires reviewed written model-use evidence before collecting
-prices for this training workflow. This is not a blanket storage prohibition:
-Part V 1.8 restricts databases beyond Permitted Use, and Part II 2.4(c) limits
-caching beyond what is reasonably required. Applicable removal obligations,
-including removal within 24 hours on provider request (Part II 3), still apply.
+The earlier written-exception requirement is superseded by the standing customer
+attestation above. Data meaning remains a separate validation concern.
 
 ## Endpoint and interpretation evidence
 
@@ -92,8 +118,9 @@ evidence. Conflicting same-date values inside one response fail closed.
 
 Snapshots and their retrieval records belong under ignored `data/private/` with
 private directory/file permissions. Source-rights expiry and deletion requests
-must block use. eToro approval requires evidence, an expiry and a specific written
-model-use exception; current system time is checked as well as retrieval time.
+must block use. eToro approval requires explicit rights evidence and either the active customer
+attestation above or a written-exception policy with expiry; current system time
+is checked as well as retrieval time.
 No subscription termination or provider deletion-request detection is automatic.
 The operator must update policy when such conditions change and delete all
 affected datasets and derived artifacts according to the applicable rights.
@@ -108,7 +135,7 @@ PYTHONPATH=src python3.13 -m money_maker_3000.feed_collection \
   --profile /path/to/existing/private/profile --probe-only
 ```
 
-After an actual reviewed rights exception and verified feed interpretation exist:
+Use the standing customer retention record above and an evidenced interpretation:
 
 ```sh
 PYTHONPATH=src python3.13 -m money_maker_3000.feed_collection \
@@ -120,6 +147,11 @@ PYTHONPATH=src python3.13 -m money_maker_3000.feed_collection \
 
 `--ca-file` optionally selects an existing trusted CA bundle. TLS validation
 cannot be disabled. No command above authorizes changing provider rights status.
+
+Historical verification through 2026-09-22 follows. Search-type and
+written-exception blockers described here are superseded by the 2026-10-03
+metadata repair and standing authorization; these past probes retained no prices.
+
 
 The initial 2026-09-14 metadata probe was rejected by automatic approval review
 under the earlier repository rule. The account holder then clarified access
@@ -182,8 +214,9 @@ private-file checks, blocked endpoints, redacted HTTP failures and stop behavior
 `preflight_collection(policy, interpretations, symbols, now)` must run before
 constructing `EtoroReader`, loading its profile, or issuing any request. The CLI
 and collection function apply this check. Policies must name exactly `etoro`,
-contain the written model-use exception, and pass both supplied/current-time
-expiry checks. Other-provider policies cannot authorize eToro retrieval.
+contain either active customer-attested authorization or a written model-use
+exception with expiry. Both supplied/current-time rights checks apply; any
+explicit expiry is honored. Other-provider policies cannot authorize eToro retrieval.
 
 Each interpretation has exactly `source`, `currency`, `currencyVerified`,
 `priceBasis`, `sessionConvention`, `currencyEvidence`, `interpretationEvidence`,
@@ -235,3 +268,27 @@ A store containing the old `market-retrieval.v1` records fails with
 `legacy-retrieval-migration-required`. Such records lack durable withdrawal state;
 this implementation does not silently default unknown prior withdrawals to empty.
 An explicit reviewed migration is required before reusing such a store.
+
+## Support-confirmed metadata repair (2026-10-03)
+
+Support reproduced omitted search type fields and duplicate explicitly requested
+`instrumentId`. Search requests omit that redundant ID field and select only an
+exact `internalSymbolFull` match. ETF verification now reads
+`/market-data/instruments?instrumentIds=<id>` (`instrumentDisplayDatas`,
+`instrumentID`, `symbolFull`, `instrumentTypeID`) and then
+`/market-data/instrument-types?instrumentTypeIds=<type>` (`instrumentTypes`,
+`instrumentTypeID`, `instrumentTypeDescription`). Official MCP route schemas
+v1.383.0 were checked on 2026-10-03. IDs and single unambiguous matches are
+validated; type 6 is not hardcoded. No rates/account/execution route was added.
+
+Currency still needs separate reliable listing evidence matching the selected
+instrument; the API mapping's currency-pending label describes API evidence,
+while `currencyVerified` attests that separate evidence. Session, close/price
+basis and corporate-action adjustment details may be recorded accurately as
+unknown for retained source-native investigation. However, `learning.py` accepts
+only `unadjusted`, `split-adjusted`, or `total-return-adjusted` in its manifest.
+An unknown price basis must not be mislabeled to pass that learner gate. Resolve
+it through provider/feed documentation or defensible reviewed reference evidence
+before model fitting. Exchange session/close and adjustment evidence is also
+needed for stronger cross-provider equivalence claims. UTC normalization alone
+proves neither session alignment nor adjustment behavior.

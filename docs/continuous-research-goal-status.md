@@ -1,5 +1,16 @@
 # Continuous research milestone scope
 
+## Standing eToro customer authorization (2026-10-03)
+
+The customer confirms all necessary eToro storage/retention, private research and
+model-use rights while active. Carry this forward without repeated requests.
+Earlier written-exception blockers are superseded for this customer; this does
+not claim a provider-written exception. See [the canonical customer policy and
+remaining data-meaning constraints](feed-collection.md). Inactivity, revocation and provider
+requests block use; account/execution/write boundaries remain unchanged.
+
+
+
 The implementation joins bounded source-native historical research, immutable
 forward forecasts and correction-aware scoring, source-pair portability evidence,
 and a short configured workflow. Simulation and execution boundaries remain
@@ -14,19 +25,15 @@ execution or account access is authorized or implemented now. Offline strategy
 refinement may generate candidates, but the active execution version must stay
 frozen; any promotion requires an auditable reviewed gate.
 
-The real eToro acquisition and first eToro forward predictions remain externally
-blocked. The account holder supplied eToro support guidance for the earlier
-Cloudflare 1010 edge block, and a later metadata-only request using the fixed
-non-browser User-Agent reached HTTP 200. That request did not establish usable
-semantic intake: explicitly projecting `instrumentId` produced a duplicate JSON
-key, so the collector omits only that redundant projection. The corrected search
-returned a unique SPY match with an ID, display name, and exchange, but its
-runtime response omitted `instrumentType`. The official [search schema](https://api-portal.etoro.com/api-reference/market-data/search-for-instruments)
-lists `instrumentType` as a string response field, so this discrepancy remains
-unresolved. The collector stays fail-closed at
-`instrument-type-or-exchange-unverified`; it does not infer ETF status. No
-history or price data was retained, and this metadata observation provides no
-research, predictive, or portability proof.
+The collector implementation now uses the support-confirmed instrument display
+and type-catalog endpoints for authoritative ETF identity. Search omits the
+redundant projected `instrumentId` and selects an exact symbol match. Support
+confirmed the missing search fields are API behavior. Customer rights are
+recorded above. This implementation has synthetic validation; no authenticated
+collection or first eToro forward prediction was performed by this repair.
+Remaining currency evidence and learner price-basis eligibility are described
+in [collection evidence](feed-collection.md). Model fitting and portability must
+not assume unknown source semantics.
 
 A separate sanitized, non-retained market-data exploration establishes only
 transport and parser shape. Search type-field variants continued to return an
@@ -40,12 +47,10 @@ close conventions, price basis, corporate-action adjustments, and costs remain
 unresolved. No values or payload were retained, and this does not make the feed
 eligible for retention, research, prediction, or portability.
 
-Separately, this workflow conservatively applies Part V 1.7's model-training
-restriction to its probability fitting and retains the written model-use evidence
-gate. Ordinary personal API use and storage within Permitted Use are not subject
-to a blanket exception requirement. See [collection evidence](feed-collection.md)
-for the official guidance and remaining interpretation limits. VAS NAV remains
-supplemental until eligible market-price history is available.
+The historical exploration above established transport/parser shape only. Its
+closed-rights interpretation is superseded by the standing customer authorization;
+source-data meaning remains separate. VAS NAV remains supplemental until eligible
+market-price history is available.
 
 Private FMP/Kibot inputs, artifacts, reports, and their hashes are excluded from
 this document and from Git. Current source approvals and retention attestations

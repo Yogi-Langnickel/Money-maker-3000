@@ -95,3 +95,13 @@ For a linked or relocated checkout, use `git rev-parse --git-common-dir` to
 identify the primary repository and workspace. If the workspace adapter or
 required context is unavailable, report that gap to the parent/user before
 dependent changes. Never guess missing policy or broaden your own authority.
+
+## Standing customer rights clarification (2026-10-03)
+
+The account holder confirms all necessary eToro market-data storage/retention,
+private strategy research and model-use rights while an active customer. Carry
+this authorization forward without asking them to repeat it. Record it as
+customer-attestation, not a provider-written exception; no expiry is invented.
+See `docs/feed-collection.md`. Inactive/revoked rights or provider deletion requests
+block use. The separate collector-only API scope and simulation/account/execution
+boundaries above remain in force. Data interpretation must remain evidence-based.

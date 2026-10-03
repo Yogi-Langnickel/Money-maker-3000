@@ -1,5 +1,13 @@
 # Money-maker-3000 Agent Memory
 
+- 2026-10-03: The customer confirms all rights needed for eToro storage/retention,
+  private strategy research and model use while active. Carry forward without
+  repeated permission requests. Use explicit customer-attestation retention policy
+  with activeCustomer true; do not invent written provider exception or expiry.
+  See `docs/feed-collection.md` for the record, metadata repair and remaining
+  currency/learner price-basis/portability constraints. Historical closed-rights
+  notes are superseded for this customer. Account/execution/write boundaries stay.
+
 Status: active
 Created: 2026-05-15
 Updated: 2026-07-25

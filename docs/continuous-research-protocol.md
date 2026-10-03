@@ -1,5 +1,16 @@
 # Continuous Strategy Research and Forward Evaluation v1
 
+## Standing eToro customer authorization (2026-10-03)
+
+The customer confirms all necessary eToro storage/retention, private research and
+model-use rights while active. Carry this forward without repeated requests.
+Earlier written-exception blockers are superseded for this customer; this does
+not claim a provider-written exception. See [the canonical customer policy and
+remaining data-meaning constraints](feed-collection.md). Inactivity, revocation and provider
+requests block use; account/execution/write boundaries remain unchanged.
+
+
+
 This workflow evaluates forecast probabilities and strategy states. It cannot
 create orders, change balances, or provide profitability evidence. All historical
 results, including the previously inspected holdout, are retrospective evidence.
@@ -157,6 +168,9 @@ memory only for the immediately preceding request; it is never serialized,
 logged, or included in research evidence. No post-change price-history request
 or research-access outcome has yet been verified.
 
+Historical 2026-09 evidence (type lookup and customer-rights blockers superseded
+by the 2026-10-03 repair/authorization above):
+
 The account holder's sanitized post-change metadata-only observation records
 that the custom User-Agent and required authentication headers reached HTTP 200.
 Requesting `instrumentId` explicitly produced a duplicate JSON key, while the
@@ -175,8 +189,9 @@ and found no duplicates; OHLC was numeric and volume was null in 188 rows from
 session, price basis, adjustment, and cost semantics remain unresolved, so this
 supports no retention, research, predictive, or portability claim.
 
-The eToro terms/model-use and retention evidence remains a separate fail-closed
-requirement before observations, derived models, or mixed reports are retained
+The following historical gate wording is superseded for this customer by the
+2026-10-03 standing authorization above. Explicit retention authorization remains
+a fail-closed requirement for unspecified callers before observations, derived models, or mixed reports are retained
 or used for research. Resolving an API transport block does not approve model
 use or retention, and a written model-use/retention exception does not override
 provider transport controls.

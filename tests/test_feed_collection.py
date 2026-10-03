@@ -48,15 +48,20 @@ class FakeReader:
 
     def get(self, path, query=None):
         self.calls.append((path,query))
+        if path == '/market-data/instruments':
+            return {'instrumentDisplayDatas':[{'instrumentID':1,'instrumentTypeID':6,'symbolFull':self.ticker}]}
+        if path == '/market-data/instrument-types':
+            return {'instrumentTypes':[{'instrumentTypeID':6,'instrumentTypeDescription':'ETF'}]}
         if query:
             ticker = query['internalSymbolFull']
+            self.ticker = ticker
             if ticker in self.failures:
                 raise CollectionError(self.failures[ticker])
             if ticker == 'VAS.ASX':
                 return {'items': []}
             return {'items':[{'instrumentId':1, 'internalSymbolFull':ticker,
                              'displayname':'SPDR S&P 500' if ticker=='SPY' else 'Invesco QQQ',
-                             'instrumentType':'ETF', 'internalExchangeName':'NYSE' if ticker=='SPY' else 'NASDAQ'}]}
+                             'internalExchangeName':'NYSE' if ticker=='SPY' else 'NASDAQ'}]}
         return payload(candle())
 
 
@@ -150,7 +155,7 @@ class FeedCollectionTests(unittest.TestCase):
         reader=FakeReader({'SPY':'instrument-unavailable'})
         result=collect(reader,retrieved_at=NOW,probe_only=True)
         self.assertEqual(result['instruments'][1]['status'],'identity-only')
-        self.assertEqual(len(reader.calls),3)
+        self.assertEqual(len(reader.calls),5)
         self.assertFalse(result['instruments'][1]['pricesRetained'])
 
     def test_authentication_forbidden_and_rate_stop(self):
@@ -170,19 +175,88 @@ class FeedCollectionTests(unittest.TestCase):
         reader=FakeReader()
         mapping=resolve_instrument(reader,'SPY')
         self.assertEqual(reader.calls,[('/market-data/search',{
-            'fields':'internalSymbolFull,displayname,instrumentType,internalExchangeName',
+            'fields':'internalSymbolFull,displayname,internalExchangeName',
             'internalSymbolFull':'SPY','pageSize':10,'pageNumber':1
-        })])
+        }), ('/market-data/instruments', {'instrumentIds':1}),
+            ('/market-data/instrument-types', {'instrumentTypeIds':6})])
         self.assertIn('not-returned',mapping['currencyVerification'])
 
-    def test_search_missing_instrument_type_stays_fail_closed(self):
+    def test_missing_search_type_and_extra_symbols_resolve_authoritatively(self):
         reader=FakeReader()
-        reader.get=lambda path, query=None: {'items':[
-            {'instrumentId':1,'internalSymbolFull':'SPY','displayname':'SPDR S&P 500',
-             'internalExchangeName':'NYSE'}
-        ]}
-        with self.assertRaisesRegex(CollectionError,'^instrument-type-or-exchange-unverified$'):
-            resolve_instrument(reader,'SPY')
+        original=reader.get
+        def get(path, query=None):
+            result=original(path,query)
+            if path == '/market-data/search':
+                result['items'].append({'instrumentId':3001,'internalSymbolFull':'SPY.RTH'})
+            return result
+        reader.get=get
+        self.assertEqual(resolve_instrument(reader,'SPY')['instrumentType'],'ETF')
+
+    def test_metadata_mismatch_malformed_and_non_etf_fail_closed(self):
+        for path, replacement in [
+            ('/market-data/instruments', {'instrumentDisplayDatas':[]}),
+            ('/market-data/instruments', {'instrumentDisplayDatas':[{'instrumentID':True,'instrumentTypeID':6,'symbolFull':'SPY'}]}),
+            ('/market-data/instruments', {'instrumentDisplayDatas':[{'instrumentID':2,'instrumentTypeID':6,'symbolFull':'SPY'}]}),
+            ('/market-data/instruments', {'instrumentDisplayDatas':[{'instrumentID':1,'instrumentTypeID':6,'symbolFull':'SPY.RTH'}]}),
+            ('/market-data/instruments', {'instrumentDisplayDatas':[{'instrumentID':1,'instrumentTypeID':True,'symbolFull':'SPY'}]}),
+            ('/market-data/instrument-types', {'instrumentTypes':[{'instrumentTypeID':6,'instrumentTypeDescription':'CFD'}]}),
+            ('/market-data/instrument-types', {'instrumentTypes':[{'instrumentTypeID':7,'instrumentTypeDescription':'ETF'}]}),
+            ('/market-data/instrument-types', {'instrumentTypes':[{'instrumentTypeID':6,'instrumentTypeDescription':'ETF'}]*2}),
+        ]:
+            reader=FakeReader(); original=reader.get
+            reader.get=lambda p,q=None: replacement if p == path else original(p,q)
+            with self.subTest(path=path,replacement=replacement),self.assertRaises(CollectionError):
+                resolve_instrument(reader,'SPY')
+
+    def test_customer_policy_shared_research_checker_and_status(self):
+        from money_maker_3000.research_cycle import retention_check
+        policy={k:v for k,v in POLICY.items() if k not in ('expiresAt','writtenModelUseException')}
+        policy.update(authorizationBasis='customer-attestation',activeCustomer=True)
+        retention_check('etoro',policy)
+        report=collect(FakeReader(),symbols=('SPY',),retrieved_at=NOW,probe_only=True,retention=policy)
+        self.assertEqual(report['researchRights'],'approved-by-supplied-evidence')
+        with self.assertRaises(CollectionError):retention_check('etoro',{**policy,'activeCustomer':False})
+        report=collect(FakeReader(),symbols=('SPY',),retrieved_at=NOW,probe_only=True,
+                       retention={**policy,'activeCustomer':False})
+        self.assertEqual(report['researchRights'],'blocked')
+
+    def test_interpretation_block_does_not_reopen_approved_rights(self):
+        policy={k:v for k,v in POLICY.items() if k not in ('expiresAt','writtenModelUseException')}
+        policy.update(authorizationBasis='customer-attestation',activeCustomer=True)
+        reader=FakeReader()
+        report=collect(reader,symbols=('SPY',),retrieved_at=NOW,retention=policy,
+                       interpretations={'SPY':{**MEANING,'currencyVerified':False}},output_root=Path('/unused'))
+        self.assertEqual(report['researchRights'],'approved-by-supplied-evidence')
+        self.assertEqual(report['instruments'][0]['reason'],'source-currency-unverified')
+        self.assertEqual(reader.calls,[])
+
+    def test_metadata_allowlist_requires_bounded_single_integer_filters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            reader=EtoroReader(path)
+            for endpoint, query in [('/market-data/instruments',None),
+                ('/market-data/instruments',{'instrumentIds':True}),
+                ('/market-data/instruments',{'instrumentIds':'1,2'}),
+                ('/market-data/instrument-types',{'instrumentTypeIds':0}),
+                ('/market-data/instrument-types',{'instrumentTypeIds':6,'extra':1})]:
+                with self.subTest(endpoint=endpoint,query=query),self.assertRaisesRegex(CollectionError,'query-not-allowlisted'):
+                    reader.get(endpoint,query)
+            with self.assertRaisesRegex(CollectionError,'endpoint-not-allowlisted'):
+                reader.get('/market-data/instruments/rates',{'instrumentIds':1})
+            self.assertEqual(reader.request_count,0)
+
+    def test_customer_attestation_without_invented_expiry_and_revocation(self):
+        policy={k:v for k,v in POLICY.items() if k not in ('expiresAt','writtenModelUseException')}
+        policy.update(authorizationBasis='customer-attestation',activeCustomer=True)
+        check_retention(policy,NOW)
+        for mutation in ({'activeCustomer':False},{'activeCustomer':1},{'activeCustomer':None},
+                         {'providerDeletionRequested':True},{'researchAllowed':False},
+                         {'authorizationBasis':'unknown'},{'evidence':''},{'expiresAt':NOW},
+                         {'writtenModelUseException':'true'}):
+            with self.subTest(mutation=mutation),self.assertRaises(CollectionError):
+                check_retention({**policy,**mutation},NOW)
+        del policy['activeCustomer']
+        with self.assertRaises(CollectionError):check_retention(policy,NOW)
 
     def test_versions_replay_and_revision_preserve_original(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -422,7 +496,7 @@ class FeedCollectionTests(unittest.TestCase):
         reader=FakeReader()
         result=collect(reader,retrieved_at=NOW,symbols=('SPY',),retention=POLICY,
                        interpretations={'SPY':reviewed},output_root=Path('/unused'))
-        self.assertEqual(len(reader.calls),1)
+        self.assertEqual(len(reader.calls),3)
         self.assertEqual(result['instruments'][0]['reason'],'resolved-instrument-differs-from-reviewed-mapping')
 
     def test_ambiguous_and_boolean_search_instrument_ids_are_rejected(self):
@@ -478,7 +552,7 @@ class FeedCollectionTests(unittest.TestCase):
             result=json.loads(output.call_args.args[0])
             self.assertEqual([item['symbol'] for item in result['instruments']],['SPY'])
             self.assertEqual(result['instruments'][0]['status'],'collected')
-            self.assertEqual(len(reader.calls),2)
+            self.assertEqual(len(reader.calls),4)
 
     def test_cli_unknown_or_duplicate_symbol_never_loads_credentials(self):
         with patch('money_maker_3000.feed_collection.EtoroReader') as reader, patch('sys.stderr'):

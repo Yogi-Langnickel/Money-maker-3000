@@ -1,6 +1,17 @@
 # Money-maker-3000 research unblock record
 
-Updated: 2026-09-22
+## Standing eToro customer authorization (2026-10-03)
+
+The customer confirms all necessary eToro storage/retention, private research and
+model-use rights while active. Carry this forward without repeated requests.
+Earlier written-exception blockers are superseded for this customer; this does
+not claim a provider-written exception. See [the canonical customer policy and
+remaining data-meaning constraints](docs/feed-collection.md). Inactivity, revocation and provider
+requests block use; account/execution/write boundaries remain unchanged.
+
+
+
+Updated: 2026-10-03
 
 Money Maker remains simulation-only. Provider data cannot create an order
 intent, and demo/live execution, account reads, credentials in evidence, and
@@ -24,21 +35,18 @@ implemented now. See the [autonomous trading roadmap](docs/autonomous-trading-ro
   and that the daily endpoint exposes OHLCV-shaped candles. It did not retain
   values, payloads, request identifiers, prices, or account data.
 
-## Active eToro research blockers
+## Remaining eToro data-meaning constraints
 
-- The [official search schema](https://api-portal.etoro.com/api-reference/market-data/search-for-instruments)
-  documents `instrumentType` and `instrumentTypeID`, but both were absent in
-  the runtime type-field variants. The collector must not infer ETF status from
-  name or exchange, so semantic intake remains fail-closed.
-- Instrument identity, listing currency, timestamps, session boundaries, close
-  or price basis, corporate-action adjustments, and cost treatment remain
-  unresolved.
-- The available daily response is capped at the latest 1,000 observations; it
-  has no documented date cursor. It does not yet establish the reserved history
-  needed for a portability evaluation.
-- The separate retention and model-use evidence gate remains closed. A
-  successful metadata or candle response does not authorize storage, research,
-  model fitting, or source portability.
+Instrument type lookup is repaired using the support-confirmed display/type
+endpoints; exact symbol identity no longer depends on omitted search fields.
+Rights are established by the standing customer authorization above.
+
+Separate listing-currency evidence is required before retention. Unknown session
+or price/adjustment basis can be recorded for source-native observations, but
+model fitting needs a supported, evidenced price-basis manifest value; do not
+invent `unadjusted`. Portability needs session, close, adjustments and cost
+comparability evidence. The latest 1,000 daily observations do not establish the
+reserved history required by a portability evaluation.
 
 ## FMP and Kibot
 
@@ -59,18 +67,15 @@ pending entry supports a profitability or improvement claim.
 
 ## Safe next actions
 
-1. Ask eToro to explain why its documented type fields are absent at runtime and
-   identify the supported read-only way to verify type, currency, session, and
-   price semantics. Do not provide credentials, request IDs, or raw payloads.
-2. Obtain reviewed written evidence for eToro retention and model use before
-   retaining any observations or derived artifacts.
-3. Obtain source documentation for timestamp, session, price basis, adjustment,
-   and cost treatment before declaring eToro compatible with another feed.
-4. Before FMP/Kibot reuse or refresh, verify the applicable active subscription
-   and retention attestations, then preserve a new immutable, dated input
-   version rather than overwriting prior evidence.
-5. Score the forward journal only when new approved observations have arrived;
-   keep source-pair evaluation frozen and do not retune for a target source.
+1. Use the recorded customer authorization; do not ask again for rights or a
+   written model-use exception.
+2. Obtain reliable listing-currency evidence and record unknown feed details
+   honestly. Confirm price-basis/adjustments before enabling learner intake.
+3. Obtain session, timestamp, close, adjustment and cost evidence before declaring
+   eToro compatible with another feed. Keep research protocols frozen.
+4. Before FMP/Kibot reuse, verify their separate active subscription/retention
+   attestations and preserve immutable dated input versions.
+5. Score pending forward evidence only after genuinely later approved data arrives.
 
 See [continuous research status](docs/continuous-research-goal-status.md) and
 [feed collection evidence](docs/feed-collection.md) for the detailed evidence

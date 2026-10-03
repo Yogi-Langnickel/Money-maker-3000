@@ -180,7 +180,7 @@ def parse_candles(payload: dict, instrument_id: int, retrieved_at: str) -> dict:
 
 def default_retention() -> dict:
     return {"status": "blocked", "researchAllowed": False, "retentionAllowed": False,
-            "evidence": TERMS_URL, "reason": "etoro-part-v-1.7-model-use-requires-written-exception",
+            "evidence": TERMS_URL, "reason": "explicit-retention-and-research-authorization-required",
             "deleteOnProviderRequestHours": 24, "automaticTerminationDetection": False}
 
 
@@ -189,7 +189,7 @@ def check_retention(policy: dict, now: str, *, research=True) -> None:
         raise CollectionError("retention-not-approved")
     if policy.get("source") != "etoro":
         raise CollectionError("retention-source-mismatch")
-    allowed = {"source", "status", "retentionAllowed", "researchAllowed", "evidence", "expiresAt", "writtenModelUseException", "providerDeletionRequested", "deleteOnProviderRequestHours", "automaticTerminationDetection"}
+    allowed = {"source", "status", "retentionAllowed", "researchAllowed", "evidence", "expiresAt", "writtenModelUseException", "providerDeletionRequested", "deleteOnProviderRequestHours", "automaticTerminationDetection", "authorizationBasis", "activeCustomer"}
     if set(policy) - allowed or not _bounded_text(policy.get("evidence"), 1000):
         raise CollectionError("invalid-retention-policy")
     if "providerDeletionRequested" in policy and type(policy["providerDeletionRequested"]) is not bool:
@@ -202,10 +202,26 @@ def check_retention(policy: dict, now: str, *, research=True) -> None:
         raise CollectionError("research-rights-not-approved")
     if not isinstance(policy.get("evidence"), str) or not policy["evidence"] or policy.get("providerDeletionRequested") is True:
         raise CollectionError("retention-revoked-or-unsupported")
-    if policy.get("expiresAt") is None or _utc(policy["expiresAt"]) <= _utc(now):
-        raise CollectionError("retention-expired")
-    if policy.get("source") == "etoro" and policy.get("writtenModelUseException") is not True:
+    instant = _utc(now)
+    customer = policy.get("authorizationBasis") == "customer-attestation"
+    if "authorizationBasis" in policy and not customer:
+        raise CollectionError("invalid-retention-policy")
+    if "activeCustomer" in policy and type(policy["activeCustomer"]) is not bool:
+        raise CollectionError("invalid-retention-policy")
+    if "writtenModelUseException" in policy and type(policy["writtenModelUseException"]) is not bool:
+        raise CollectionError("invalid-retention-policy")
+    if customer:
+        if policy.get("activeCustomer") is not True:
+            raise CollectionError("customer-entitlement-inactive")
+    elif policy.get("writtenModelUseException") is not True:
         raise CollectionError("etoro-model-use-exception-required")
+    if "activeCustomer" in policy and policy["activeCustomer"] is not True:
+        raise CollectionError("customer-entitlement-inactive")
+    if "expiresAt" in policy:
+        if _utc(policy["expiresAt"]) <= instant:
+            raise CollectionError("retention-expired")
+    elif not customer:
+        raise CollectionError("retention-expired")
 
 
 def _bounded_text(value, maximum=256):
@@ -327,9 +343,22 @@ class EtoroReader:
     def get(self, path: str, query: dict | None = None) -> dict:
         if self._stopped:
             raise CollectionError("collection-stopped")
-        if path != "/market-data/search" and not re.fullmatch(r"/market-data/instruments/[1-9][0-9]*/history/candles/desc/OneDay/(?:[1-9][0-9]{0,2}|1000)", path):
+        if path not in {"/market-data/search", "/market-data/instruments", "/market-data/instrument-types"} and not re.fullmatch(r"/market-data/instruments/[1-9][0-9]*/history/candles/desc/OneDay/(?:[1-9][0-9]{0,2}|1000)", path):
             raise CollectionError("endpoint-not-allowlisted")
-        if query and (path != "/market-data/search" or set(query) != {"fields", "internalSymbolFull", "pageSize", "pageNumber"}):
+        if query:
+            valid = (isinstance(query, dict) and (
+                (path == "/market-data/search" and set(query) == {"fields", "internalSymbolFull", "pageSize", "pageNumber"}
+                 and query["fields"] == "internalSymbolFull,displayname,internalExchangeName"
+                 and isinstance(query["internalSymbolFull"], str)
+                 and query["internalSymbolFull"] in {item[0] for item in SYMBOLS.values()}
+                 and type(query["pageSize"]) is int and query["pageSize"] == 10
+                 and type(query["pageNumber"]) is int and query["pageNumber"] == 1) or
+                (path == "/market-data/instruments" and set(query) == {"instrumentIds"} and _instrument_id(query["instrumentIds"])) or
+                (path == "/market-data/instrument-types" and set(query) == {"instrumentTypeIds"} and _instrument_id(query["instrumentTypeIds"]))
+            ))
+            if not valid:
+                raise CollectionError("query-not-allowlisted")
+        elif path in {"/market-data/instruments", "/market-data/instrument-types"}:
             raise CollectionError("query-not-allowlisted")
         if self.request_count >= 12:
             self._stopped = True
@@ -375,7 +404,7 @@ def resolve_instrument(reader, symbol: str) -> dict:
     if symbol not in SYMBOLS:
         raise CollectionError("symbol-not-allowlisted")
     ticker, currency, names = SYMBOLS[symbol]
-    payload = reader.get("/market-data/search", {"fields": "internalSymbolFull,displayname,instrumentType,internalExchangeName", "internalSymbolFull": ticker, "pageSize": 10, "pageNumber": 1})
+    payload = reader.get("/market-data/search", {"fields": "internalSymbolFull,displayname,internalExchangeName", "internalSymbolFull": ticker, "pageSize": 10, "pageNumber": 1})
     items = payload.get("items")
     if not isinstance(items, list):
         raise CollectionError("invalid-search-response")
@@ -385,12 +414,30 @@ def resolve_instrument(reader, symbol: str) -> dict:
     item = matches[0]
     instrument_id = item.get("instrumentId")
     name = item.get("displayname", "")
-    kind = item.get("instrumentType", "")
     exchange = item.get("internalExchangeName", "")
     if not _instrument_id(instrument_id) or not isinstance(name, str) or not all(n in name.lower() for n in names):
         raise CollectionError("instrument-identity-unverified")
-    if not isinstance(kind, str) or kind.lower() not in ("etf", "etfs", "exchange traded fund") or not isinstance(exchange, str) or not exchange:
+    if not _bounded_text(exchange):
         raise CollectionError("instrument-type-or-exchange-unverified")
+    # Support-confirmed authoritative path; search type fields can be omitted.
+    details = reader.get("/market-data/instruments", {"instrumentIds": instrument_id})
+    records = details.get("instrumentDisplayDatas") if isinstance(details, dict) else None
+    if not isinstance(records, list) or len(records) != 1 or not isinstance(records[0], dict):
+        raise CollectionError("invalid-instruments-response")
+    record = records[0]
+    if not _instrument_id(record.get("instrumentID")) or record["instrumentID"] != instrument_id or record.get("symbolFull") != ticker:
+        raise CollectionError("instrument-details-mismatch")
+    type_id = record.get("instrumentTypeID")
+    if not _instrument_id(type_id):
+        raise CollectionError("instrument-type-unverified")
+    types = reader.get("/market-data/instrument-types", {"instrumentTypeIds": type_id})
+    entries = types.get("instrumentTypes") if isinstance(types, dict) else None
+    if not isinstance(entries, list) or len(entries) != 1 or not isinstance(entries[0], dict):
+        raise CollectionError("invalid-instrument-types-response")
+    entry = entries[0]
+    kind = entry.get("instrumentTypeDescription")
+    if not _instrument_id(entry.get("instrumentTypeID")) or entry["instrumentTypeID"] != type_id or not _bounded_text(kind) or kind.lower() not in ("etf", "etfs", "exchange traded fund"):
+        raise CollectionError("instrument-type-unverified")
     return {"symbol": symbol, "providerSymbol": ticker, "instrumentId": instrument_id,
             "displayName": name, "instrumentType": kind, "exchange": exchange,
             "currency": currency, "currencyVerification": "expected-listing-currency-not-returned-by-api",
@@ -530,6 +577,13 @@ def collect(reader, *, symbols=("SPY", "QQQ", "VAS"), retrieved_at: str,
             interpretations: dict | None = None, probe_only=False) -> dict:
     _utc(retrieved_at)
     reports = []
+    rights = "blocked"
+    try:
+        check_retention(retention, retrieved_at)
+        check_retention(retention, datetime.now(timezone.utc).isoformat())
+        rights = "approved-by-supplied-evidence"
+    except CollectionError:
+        pass
     if not probe_only:
         try:
             preflight_collection(retention if retention is not None else default_retention(), interpretations, symbols, retrieved_at)
@@ -538,7 +592,7 @@ def collect(reader, *, symbols=("SPY", "QQQ", "VAS"), retrieved_at: str,
         except CollectionError as exc:
             return {"schemaVersion": "feed-collection-status.v1", "retrievedAt": retrieved_at, "source": "etoro",
                     "instruments": [{"symbol": symbol, "status": "unavailable", "reason": str(exc)} for symbol in symbols],
-                    "researchRights": "blocked", "accountData": "absent", "execution": "blocked"}
+                    "researchRights": rights, "accountData": "absent", "execution": "blocked"}
     stopped = False
     for symbol in symbols:
         if symbol not in SYMBOLS:
@@ -569,7 +623,7 @@ def collect(reader, *, symbols=("SPY", "QQQ", "VAS"), retrieved_at: str,
             reports.append({"symbol": symbol, "status": "unavailable", "reason": reason})
             stopped = reason in ("authentication-failed", "cloudflare-browser-signature-block", "http-forbidden-cause-unresolved", "rate-limit-stop", "collection-stopped")
     return {"schemaVersion": "feed-collection-status.v1", "retrievedAt": retrieved_at, "source": "etoro", "instruments": reports,
-            "researchRights": "approved-by-supplied-evidence" if retention and retention.get("writtenModelUseException") is True and retention.get("researchAllowed") is True else "requires-reviewed-written-exception", "accountData": "absent", "execution": "blocked"}
+            "researchRights": rights, "accountData": "absent", "execution": "blocked"}
 
 
 def main(argv=None) -> int:
