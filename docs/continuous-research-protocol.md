@@ -266,3 +266,8 @@ A restored outcome becomes available only after its corrected score is durable,
 or after equality with the latest durable score is verified. An interruption
 between those operations leaves the outcome conservatively unavailable; replay
 repairs availability without exposing an older, superseded outcome.
+
+
+## Autonomous v1 update
+
+Autonomous v1 adds monetary development selection and a fixed genuine prospective shadow comparison alongside the older Brier diagnostic workflow. It never turns knownHistoryEnd into fresh confirmation, substitutes account balances for simulated capital or reuses an inspected holdout to select an alternate. All interrupted candidate trials remain immutable and resumable. See [autonomous-profit-shadow-v1.md](autonomous-profit-shadow-v1.md).

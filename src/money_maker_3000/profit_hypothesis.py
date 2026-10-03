@@ -31,7 +31,7 @@ INSTRUMENTS = {
     "VAS": {"product": "ETF", "currency": "AUD", "session": "AU-equities-regular"},
 }
 MAX_CANDLES = 1000
-GRADE_RUBRIC = {"version": "profit-hypothesis-grade.v1", "missingEvidence": "unclear", "unlikely": "nonpositive net simulated return or no benchmark improvement", "weak": "positive simulated edge but cost or chronological stability fails", "strong": "positive against benchmark, positive double-cost sensitivity and every frozen stability slice; monitoring candidate only"}
+GRADE_RUBRIC = {"version": "profit-hypothesis-grade.v2", "missingEvidence": "unclear; fewer than ten closed trades is insufficient; dependent retrospective samples never establish independent confirmation", "unlikely": "nonpositive net simulated return or no benchmark improvement", "weak": "positive simulated edge but cost or chronological stability fails", "strong": "at least ten closed trades, positive against benchmark, positive double-cost sensitivity and every frozen stability slice; retrospective monitoring candidate only, independence unproven"}
 
 
 class HypothesisError(ValueError):
@@ -163,11 +163,16 @@ def _inputs_available_for_signal(rows: list[dict[str, Any]], index: int) -> bool
     return all(_time(row["availableAt"]) <= decision_time for row in rows[max(0, index - 14): index + 1])
 
 
+def _checked(*values: float) -> None:
+    _require(all(_finite(value) for value in values), "hypothesis-portfolio-arithmetic-overflow")
+
+
 def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_cash: float = 10000.0,
              cost_bps: float | None = None, start_index: int = 0, end_index: int | None = None,
              aligned_signals: set[int] | None = None) -> dict[str, Any]:
     """Cash/long-only deterministic simulator; signals fill no earlier than the next bar."""
-    _require(initial_cash > 0 and math.isfinite(initial_cash), "hypothesis-invalid-cash")
+    _require(_finite(initial_cash, positive=True), "hypothesis-invalid-cash")
+    _require(all(_finite(row.get(field), positive=True) for row in rows for field in ("open", "high", "low", "close")), "hypothesis-invalid-ohlcv")
     stop = hypothesis["stopLossPct"]; max_hold = hypothesis["maxHoldingBars"]; cost = (hypothesis["costBps"] if cost_bps is None else cost_bps) / 10000
     end_index = len(rows) - 1 if end_index is None else end_index
     cash, quantity, entry, entry_index, trades, equity = initial_cash, 0.0, None, None, [], []
@@ -179,6 +184,7 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
         if pending and quantity == 0:
             gross = cash / (1 + cost); entry_cost = gross * cost; entry_cash_spent = gross + entry_cost
             quantity, cash, entry, entry_index, entry_id = gross / row["open"], 0.0, row["open"], index, "entry-%d" % index
+            _checked(gross, quantity, entry_cost, entry_cash_spent)
             transaction_costs += gross * cost; gross_turnover += gross
             trades.append({"id": entry_id, "type": "entry", "signalBar": index - 1, "fillBar": index, "fill": row["open"], "notional": gross, "cost": entry_cost, "cashSpent": entry_cash_spent, "time": row["start"]})
             pending = False
@@ -191,6 +197,7 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
             elif index - (entry_index or index) >= max_hold: reason, fill = "maximum-holding-close", row["close"]
             if fill is not None:
                 gross = quantity * fill; proceeds = gross * (1 - cost)
+                _checked(gross, proceeds)
                 transaction_costs += gross * cost; gross_turnover += gross
                 exit_cost = gross * cost
                 trades.append({"entryId": entry_id, "type": "exit", "entryBar": entry_index, "fillBar": index, "fill": fill, "notional": gross, "cost": exit_cost, "entryCost": entry_cost, "entryCashSpent": entry_cash_spent, "reason": reason,
@@ -198,12 +205,26 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
                 cash, quantity, entry, entry_index, entry_cash_spent, entry_cost, entry_id = proceeds, 0.0, None, None, 0.0, 0.0, None
         if quantity:
             exposure_bars += 1
-        equity.append({"time": row["end"], "simulatedEquity": cash + quantity * row["close"]})
+        marked = cash + quantity * row["close"]
+        _checked(marked, transaction_costs, gross_turnover)
+        equity.append({"time": row["end"], "simulatedEquity": marked})
         if quantity == 0 and index < end_index and index >= 14:
             next_row = rows[index + 1]
             pending = ((aligned_signals is None or index in aligned_signals) and _inputs_available_for_signal(rows, index) and _signal(hypothesis, rows, index)
                        and _time(row["availableAt"]) <= _time(next_row["start"]))
+    terminal_open = quantity > 0
+    if quantity and equity:
+        gross = quantity * rows[end_index]["close"]; proceeds = gross * (1 - cost)
+        _checked(gross, proceeds)
+        exit_cost = gross * cost; transaction_costs += exit_cost; gross_turnover += gross
+        trades.append({"entryId": entry_id, "type": "exit", "entryBar": entry_index, "fillBar": end_index,
+                       "fill": rows[end_index]["close"], "notional": gross, "cost": exit_cost, "entryCost": entry_cost,
+                       "entryCashSpent": entry_cash_spent, "reason": "terminal-liquidation",
+                       "simulatedNetPnl": proceeds - entry_cash_spent, "time": rows[end_index]["end"]})
+        cash, quantity = proceeds, 0.0
+        equity[-1]["simulatedEquity"] = cash
     final = equity[-1]["simulatedEquity"] if equity else initial_cash
+    _checked(final, transaction_costs, gross_turnover, final / initial_cash, gross_turnover / initial_cash)
     exits = [item for item in trades if item["type"] == "exit"]
     peak, maximum_drawdown = initial_cash, 0.0
     for point in equity:
@@ -211,18 +232,20 @@ def backtest(hypothesis: dict[str, Any], rows: list[dict[str, Any]], *, initial_
     return {"simulated": True, "initialCash": initial_cash, "finalEquity": final, "netSimulatedReturn": final / initial_cash - 1,
             "tradeLedger": trades, "equityCurve": equity, "tradeCount": len(exits), "closedSimulatedPnl": sum(item["simulatedNetPnl"] for item in exits), "expectancy": (sum(item["simulatedNetPnl"] for item in exits) / len(exits) if exits else None),
             "maxDrawdown": maximum_drawdown, "exposure": exposure_bars / len(equity) if equity else 0,
-            "grossTurnover": gross_turnover / initial_cash, "transactionCosts": transaction_costs, "costBps": cost * 10000, "openPositionAtEnd": quantity > 0,
-            "policy": "next-executable-bar; conservative intrabar stop; final open position marked-to-market"}
+            "grossTurnover": gross_turnover / initial_cash, "transactionCosts": transaction_costs, "costBps": cost * 10000, "openPositionAtEnd": False, "terminalPositionLiquidated": terminal_open,
+            "policy": "next-executable-bar; conservative intrabar stop; terminal liquidation with matching selling costs"}
 
 
 def _benchmark(rows: list[dict[str, Any]], start: int, end: int, cost_bps: float) -> float:
     if end <= start: return 0.0
     entry, final = rows[start + 1]["open"], rows[end]["close"]
-    return (final / entry) * ((1 - cost_bps / 10000) / (1 + cost_bps / 10000)) - 1
+    ratio = (final / entry) * ((1 - cost_bps / 10000) / (1 + cost_bps / 10000))
+    _checked(ratio)
+    return ratio - 1
 
 
 def _grade(result: dict[str, Any], benchmark: float, stability: list[float], sensitivity: float) -> tuple[str, str]:
-    if result["tradeCount"] < 3 or result["expectancy"] is None:
+    if result["tradeCount"] < 10 or result["expectancy"] is None:
         return "unclear", "missing-required-trade-evidence"
     if result["netSimulatedReturn"] <= 0 or result["netSimulatedReturn"] <= benchmark:
         return "unlikely", "frozen-net-and-benchmark-criterion-not-met"
@@ -304,7 +327,7 @@ def _aligned_signal_indices(dataset: dict[str, Any], primary: str) -> tuple[set[
         usable = True
         for name, high_rows in others.items():
             matches = [high for high in high_rows if _time(high["end"]) <= _time(row["end"]) and _time(high["availableAt"]) <= _time(row["availableAt"])]
-            if matches: evidence[name] += 1
+            if matches and (_time(row["availableAt"]) - max(_time(high["end"]) for high in matches)).total_seconds() <= INTERVAL_SECONDS[name] * 2: evidence[name] += 1
             else: usable = False
         if usable: allowed.add(index)
     return allowed, evidence
@@ -427,7 +450,7 @@ def run(config: dict[str, Any], *, evidence_root: Path | None = None, allow_synt
                        "uncertainty": {"tradeCount": evaluation["tradeCount"], "assessment": "insufficient-independent-trades" if evaluation["tradeCount"] < 10 else "dependent-chronological-sample"}, "grade": grade, "gradeReason": reason})
     config_sha256, scope = _digest(config), _attempt_scope(config, accepted=True)
     frozen = {"version": VERSION, "instrument": config["instrument"], "primaryInterval": primary, "dataset": {key: {field: value[field] for field in ("sha256", "count", "coverage")} for key, value in dataset["intervals"].items()},
-              "overlap": dataset["overlap"], "timeframeAlignment": {"primary": primary, "roles": {name: ("primary" if name == primary else "higher-confirmation" if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary] else "lower-coverage-only") for name in dataset["intervals"]}, "eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptConfigSha256": config_sha256, "attemptScope": scope, "attemptedTrials": len(trials), "retainedAttemptCount": retained_attempt_count if retained_attempt_count is not None else _attempt_count(evidence_root, config_sha256, scope), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
+              "overlap": dataset["overlap"], "timeframeAlignment": {"primary": primary, "roles": {name: ("primary" if name == primary else "higher-availability-freshness-gate" if TIMEFRAME_RANK[name] > TIMEFRAME_RANK[primary] else "lower-coverage-only") for name in dataset["intervals"]}, "eligiblePrimarySignals": len(aligned_signals), "higherTimeframeAvailableEndpoints": alignment_evidence}, "hypotheses": candidates, "gradeRubric": GRADE_RUBRIC, "selectionAccounting": {"attemptConfigSha256": config_sha256, "attemptScope": scope, "attemptedTrials": len(trials), "retainedAttemptCount": retained_attempt_count if retained_attempt_count is not None else _attempt_count(evidence_root, config_sha256, scope), "maxTrials": len(candidates), "multipleComparisonCount": len(candidates), "holdoutRefinement": "rejected-without-fresh-dataset"}}
     _require(report_metadata is None or type(report_metadata) is dict and set(report_metadata) == {"frozenRuleRetest", "originalReportSha256"}
              and report_metadata["frozenRuleRetest"] is True and type(report_metadata["originalReportSha256"]) is str
              and len(report_metadata["originalReportSha256"]) == 64 and all(char in "0123456789abcdef" for char in report_metadata["originalReportSha256"]),

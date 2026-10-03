@@ -18,3 +18,8 @@ not Wilder recursive smoothing. Their feature identities are
 `rsi-simple-average-14.v1` and `normalized-atr-simple-average-14.v1`. Earlier draft
 artifacts bearing Wilder labels must not be accepted as equivalent definitions;
 regenerate from exact permitted local input rather than relabeling saved evidence.
+
+
+## Autonomous v1 update
+
+Point-in-time repair: every explicitly supplied row availability must be valid and no later than the decision availability. Empty/false timestamps are invalid. ATR requires consistent low/open/close/high ranges in addition to attested OHLC meaning. Completion alone cannot authorize a late historical row.

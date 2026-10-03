@@ -219,10 +219,11 @@ def refresh_collection(config: dict) -> dict:
     from datetime import datetime,timezone
     from .feed_collection import preflight_collection, collect, EtoroReader
     try:
-        L._keys(config, {'profilePath','outputRoot','retention','interpretations','symbols'})
+        required = {'profilePath','outputRoot','retention','interpretations','symbols'}
+        L._require(type(config) is dict and required <= set(config) <= required | {'caFile'}, 'invalid-collector-config')
         preflight_collection(config['retention'],config['interpretations'],tuple(config['symbols']),now())
         # Construction can access only the explicitly configured profile after rights gate.
-        reader = EtoroReader(Path(config['profilePath']))
+        reader = EtoroReader(Path(config['profilePath']), ca_file=config.get('caFile'))
         return collect(reader,symbols=tuple(config['symbols']),retrieved_at=now(),
                        output_root=Path(config['outputRoot']),retention=config['retention'],
                        interpretations=config['interpretations'])

@@ -91,10 +91,16 @@ def build_simulation_run(
     run_id_suffix: str | None = None,
 ) -> dict[str, Any]:
     evaluated_at = utc_iso(now or datetime.fromisoformat("2026-05-14T00:00:00+00:00"))
-    effective_budget_policy = budget_policy or DEFAULT_BUDGET_POLICY
-    effective_allocation_policy = allocation_policy or DEFAULT_ALLOCATION_POLICY
-    effective_risk_policy = risk_policy or DEFAULT_RISK_POLICY
-    effective_schedule_policy = schedule_policy or DEFAULT_SCHEDULE_POLICY
+    effective_budget_policy = DEFAULT_BUDGET_POLICY if budget_policy is None else budget_policy
+    effective_allocation_policy = DEFAULT_ALLOCATION_POLICY if allocation_policy is None else allocation_policy
+    effective_risk_policy = DEFAULT_RISK_POLICY if risk_policy is None else risk_policy
+    effective_schedule_policy = DEFAULT_SCHEDULE_POLICY if schedule_policy is None else schedule_policy
+    for policy_name, supplied, expected in (("budget", effective_budget_policy, DEFAULT_BUDGET_POLICY),
+                                             ("allocation", effective_allocation_policy, DEFAULT_ALLOCATION_POLICY),
+                                             ("risk", effective_risk_policy, DEFAULT_RISK_POLICY),
+                                             ("schedule", effective_schedule_policy, DEFAULT_SCHEDULE_POLICY)):
+        if type(supplied) is not dict or not set(expected) <= set(supplied):
+            raise ValueError("invalid-" + policy_name + "-policy")
     effective_config = merge_simulation_config(strategy_id, simulation_config)
     strategy = strategy_by_id(effective_config["strategyId"])
     if strategy:

@@ -85,7 +85,7 @@ class ProfitHypothesisTests(unittest.TestCase):
     def test_interval_contract_overlap_caps_and_exact_timestamps(self):
         dataset = P.validate_dataset(config())
         self.assertTrue(dataset["overlap"]["usable"])
-        self.assertEqual(P.run(config(), allow_synthetic_smoke=True)["frozen"]["timeframeAlignment"]["roles"], {"1d": "primary", "4h": "lower-coverage-only", "1w": "higher-confirmation"})
+        self.assertEqual(P.run(config(), allow_synthetic_smoke=True)["frozen"]["timeframeAlignment"]["roles"], {"1d": "primary", "4h": "lower-coverage-only", "1w": "higher-availability-freshness-gate"})
         invalid_duration = config(); invalid_duration["datasets"]["4h"][0]["end"] = "2024-01-01T20:00:00Z"; invalid_duration["datasets"]["4h"][0]["availableAt"] = "2024-01-01T20:00:00Z"; invalid_duration["datasets"]["4h"][0]["provenance"]["retrievedAt"] = "2024-01-01T20:00:00Z"
         with self.assertRaisesRegex(P.HypothesisError, "interval-duration"):
             P.validate_dataset(invalid_duration)

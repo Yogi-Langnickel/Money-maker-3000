@@ -216,6 +216,13 @@ def _build_parser() -> argparse.ArgumentParser:
     learning_predict.add_argument("--history-csv", type=Path, required=True)
     learning_predict.add_argument("--dataset-manifest", type=Path, required=True)
     learning_predict.add_argument("--allow-synthetic-smoke", action="store_true")
+    for name in ('autonomous-cycle', 'autonomous-status', 'autonomous-replay', 'autonomous-snapshot', 'autonomous-restore'):
+        command = subparsers.add_parser(name, help='bounded private offline economic research and shadow simulation')
+        command.add_argument('--config', type=Path)
+        command.add_argument('--allow-synthetic-smoke', action='store_true')
+        command.add_argument('--snapshot', type=Path)
+        command.add_argument('--restore-root', type=Path)
+
     for name in ('research-cycle','research-status','research-replay'):
         research = subparsers.add_parser(name, help='configured local strategy research workflow')
         research.add_argument('--config',required=True,type=Path)
@@ -561,6 +568,10 @@ def main(argv: list[str] | None = None) -> int:
             result = _run_with_optional_profile(args.profile, lambda: run_lease_report(args))
         elif args.command == "run-once":
             result = _run_with_optional_profile(args.profile, lambda: run_once_command(args))
+        elif args.command.startswith('autonomous-'):
+            from money_maker_3000.autonomous_cli import coordinate
+            result = coordinate(args.config, mode=args.command.removeprefix('autonomous-'), allow_synthetic=args.allow_synthetic_smoke,
+                                snapshot_path=args.snapshot, restore_root=args.restore_root)
         elif args.command.startswith("research-"):
             from money_maker_3000.research_cycle_cli import coordinate
             result = coordinate(args.config, mode=args.command.removeprefix('research-'), allow_synthetic=args.allow_synthetic_smoke)

@@ -352,3 +352,8 @@ preview semantics, and reconciliation are proven.
 - Scheduler/ledger integration with local simulation leases.
 - Demo order preview or execution.
 - Live trading.
+
+
+## Autonomous v1 update
+
+Autonomous v1 separates `autonomous_cli.py` coordination, `autonomous_research.py` frozen probabilistic/economic trials and private event store, `economic_portfolio.py` checked long/cash accounting, `shadow_portfolio.py` durable prospective decisions/current revisions/reference policy, and `autonomous_recovery.py` consistent graph snapshots and semantic replay. The collector remains separate. See [autonomous-profit-shadow-v1.md](autonomous-profit-shadow-v1.md).

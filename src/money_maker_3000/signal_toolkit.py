@@ -78,6 +78,12 @@ def _validate_rows(rows: list[Any], *, completed_at: Any, available_at: Any) -> 
         current = utc_timestamp(end if "T" in str(end) else str(end) + "T00:00:00Z")
         _require(prior is None or current > prior, "signal-unordered-history")
         _require(current <= completed, "signal-incomplete-or-future-bar")
+        declared = _row(row, "availableAt")
+        if declared is None:
+            declared = _row(row, "available_at")
+        if declared is not None:
+            row_available = utc_timestamp(declared)
+            _require(current <= row_available <= available, "signal-row-unavailable-at-decision")
         _require(_number(_row(row, "close")), "signal-invalid-close")
         prior = current
     return completed, available
@@ -111,6 +117,10 @@ def evaluate_feature(name: str, rows: list[Any], *, completed_at: Any, available
         window = rows[-15:]
         if any(not _number(_row(row, field)) for row in window for field in ("high", "low", "close")):
             return {**result, "status": "unavailable", "reason": "ohlc-unavailable-not-derived", "value": None}
+        _require(all(float(_row(row, "low")) <= float(_row(row, "close")) <= float(_row(row, "high"))
+                     and (_row(row, "open") is None or _number(_row(row, "open"))
+                          and float(_row(row, "low")) <= float(_row(row, "open")) <= float(_row(row, "high")))
+                     for row in window), "signal-inconsistent-ohlc")
         ranges = [max(float(_row(row, "high")) - float(_row(row, "low")),
                       abs(float(_row(row, "high")) - float(_row(prev, "close"))),
                       abs(float(_row(row, "low")) - float(_row(prev, "close"))))

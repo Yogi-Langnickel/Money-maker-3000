@@ -1,3 +1,21 @@
+# Autonomous economic and shadow research (2026-10-03)
+
+See [autonomous-profit-shadow-v1.md](autonomous-profit-shadow-v1.md) for the complete frozen pipeline, private schemas, fixed prospective comparison, lifetime alpha allocation, recovery and observed-input limitations. New modules autonomous_research/economic_portfolio/shadow_portfolio/autonomous_recovery/autonomous_cli retain stdlib-only offline simulations and collector isolation. Explicit autonomous-cycle configuration may invoke only the existing separate permitted read-only collector; status/replay/snapshot/restore never load credentials. Source-native unknown semantics are retained under current rights but do not qualify economic/model research. No provider balances size capital.
+
+The 2026-10-03 observed SPY pass retained1000 normalized records privately; economics remained not-evaluated because candle timestamp/session/price/adjustment/availability meaning is unknown. Private output is ignored under primary data/etoro-autonomous-v1 and .local/autonomous-profit-shadow-v1 and survives task-worktree cleanup. Durable accepted develop uses /Users/yogi/Coding/.worktrees/money-maker-integration; original user dirty unblockme.md remains preserved on its named branch. See incidents/autonomous-profit-shadow-correctness.md and reviews/autonomous-profit-shadow-v1.md.
+
+Both independent personas approved immutable v2 after all required corrections;
+developer and coordinator independently passed 389 tests, compileall,
+contract-manifest and fixture-provenance checks. Fixed prospective membership,
+outcome horizon and original comparison identity survive withdrawal/restoration;
+own model protocol governs incumbent cadence. Read-only recovery validates
+verified producer publication remnants without deleting them; exclusive retry
+repairs those remnants and rejects arbitrary hardlinks. Statistical finite-sample
+assumptions and unverified observed feed meanings remain explicit constraints.
+The coordinator may fast-forward the original preservation branch after proving
+the committed unblockme.md blob and pre-existing dirty bytes/diff unchanged;
+the durable develop checkout stays clean and intentionally retained.
+
 # Money-maker-3000 Agent Memory
 
 - 2026-10-03 support clarification: search type fields may be omitted; use exact

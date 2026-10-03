@@ -95,3 +95,8 @@ includes distinct sanitized blocked failure classes with the same safe instrumen
 even when the blocked dataset may differ; the retained attempt count therefore
 conservatively overcounts across datasets. Repeating the same safe scope/error
 record deduplicates; it does not count every differing raw rejected configuration. Successful attempt matching still requires its dataset hash.
+
+
+## Autonomous v1 update
+
+The 2026-10-03 repair explicitly liquidates terminal positions with selling costs, rejects arithmetic overflow and requires ten closed trades before the highest retrospective hypothesis grade. Higher-timeframe roles are availability/freshness gates, not directional confirmation; fixed duration and UTC weekday checks do not attest exchange calendars. The newer [autonomous-profit-shadow-v1.md](autonomous-profit-shadow-v1.md) separates current prospective qualification from these retrospective grades.

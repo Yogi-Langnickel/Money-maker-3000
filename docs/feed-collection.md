@@ -327,3 +327,8 @@ it through provider/feed documentation or defensible reviewed reference evidence
 before model fitting. Exchange session/close and adjustment evidence is also
 needed for stronger cross-provider equivalence claims. UTC normalization alone
 proves neither session alignment nor adjustment behavior.
+
+
+## Autonomous v1 update
+
+On 2026-10-03 the existing SPY-only collector successfully retained1000 normalized observations privately using the existing profile and trusted CA bundle. Current customer-attested storage/research/model rights remain active; no provider-written exception or expiry was invented. Official issuer listing/currency evidence does not establish eToro fromDate session, completion, price or adjustment meaning. The autonomous source-native adapter retains those unknowns and blocks economic/model eligibility. See [autonomous-profit-shadow-v1.md](autonomous-profit-shadow-v1.md) for the redacted observed pass and private recovery graph.

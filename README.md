@@ -287,3 +287,8 @@ five-observation forecasts, correction-aware scoring, semantic read-only replay,
 and sealed strategy-specific portability evidence. It remains local research
 without orders or profitability claims. Private inputs, source rights, and
 forward outcomes are separate gates.
+
+
+## Autonomous v1 update
+
+The private `autonomous-cycle`, `autonomous-status`, `autonomous-replay`, `autonomous-snapshot` and `autonomous-restore` commands join predefined forecasts to frozen economic simulations and prospective shadow evidence. See [Autonomous Profit Research and Shadow Portfolio v1](docs/autonomous-profit-shadow-v1.md). Unknown feed semantics produce precise ineligible outcomes; no future-profit promise or execution is introduced.
