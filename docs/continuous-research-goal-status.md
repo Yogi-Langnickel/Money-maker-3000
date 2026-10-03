@@ -42,14 +42,19 @@ numeric type fields. A `OneDay/1` candle response exposed OHLCV fields. A
 `OneDay/1000` response contained 1,000 candles; the strict parser accepted 999
 complete rows from 2022-08-22 through 2026-09-18, excluded one unfinished
 current candle, and found no duplicates. OHLC values were numeric; volume was
-null in 188 rows from 2022-08-22 through 2023-05-19. Timestamps, session and
-close conventions, price basis, corporate-action adjustments, and costs remain
-unresolved. No values or payload were retained, and this does not make the feed
+null in 188 rows from 2022-08-22 through 2023-05-19. Timestamp meaning and session
+alignment, close conventions, price basis, corporate-action adjustments, and
+costs remain unresolved. The support reply supplied on 2026-10-03 confirms
+ISO 8601 candle timestamps and ISO 8601 UTC rates `date`; formatting alone does
+not settle those semantics. No values or payload were retained, and this does not make the feed
 eligible for retention, research, prediction, or portability.
 
 The historical exploration above established transport/parser shape only. Its
 closed-rights interpretation is superseded by the standing customer authorization;
-source-data meaning remains separate. VAS NAV remains supplemental until eligible
+source-data meaning remains separate. Support cannot confirm retention duration
+or model-use permissions from the Public API contract; this does not revoke
+customer-attested rights or provide the remaining currency/price-basis evidence.
+VAS NAV remains supplemental until eligible
 market-price history is available.
 
 Private FMP/Kibot inputs, artifacts, reports, and their hashes are excluded from

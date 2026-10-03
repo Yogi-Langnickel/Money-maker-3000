@@ -58,6 +58,8 @@ def _canonical(value: object) -> bytes:
 
 
 def _json(data: bytes) -> object:
+    # Support confirmed equal duplicated search instrumentId keys mean one ID.
+    # Avoid requesting that projection; keep all incoming duplicate keys invalid.
     def pairs(items):
         result = {}
         for key, value in items:
@@ -401,6 +403,11 @@ class EtoroReader:
 
 
 def resolve_instrument(reader, symbol: str) -> dict:
+    """Resolve exact symbols, then authoritative display/type metadata.
+
+    Search type hints are unreliable. Display priceSource is a source identity,
+    not evidence of listing currency, candle price basis or adjustments.
+    """
     if symbol not in SYMBOLS:
         raise CollectionError("symbol-not-allowlisted")
     ticker, currency, names = SYMBOLS[symbol]

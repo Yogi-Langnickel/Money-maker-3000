@@ -1,5 +1,9 @@
 # eToro User-Agent follow-up
 
+Historical review: the search-type blocker reported below was superseded on
+2026-10-03 by display/type lookup and the standing customer authorization.
+See [the current support record](../feed-collection.md#support-confirmed-metadata-repair-2026-10-03).
+
 ## Scope
 
 This patch changes only the read-only eToro collector's request identifier and

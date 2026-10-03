@@ -41,6 +41,14 @@ Instrument type lookup is repaired using the support-confirmed display/type
 endpoints; exact symbol identity no longer depends on omitted search fields.
 Rights are established by the standing customer authorization above.
 
+The support reply supplied on 2026-10-03 confirms equal duplicated search IDs
+identify the same instrument; the collector avoids the redundant projection and
+keeps duplicate-key rejection. Rates `date` is ISO 8601 UTC and candle timestamps
+are ISO 8601. Support cannot establish listing currency, session convention,
+price basis, adjustments, historical retention duration, or model-use permissions
+from the API contract. Contract silence does not revoke the customer's rights
+attestation. See [the current support record](docs/feed-collection.md#support-confirmed-metadata-repair-2026-10-03).
+
 Separate listing-currency evidence is required before retention. Unknown session
 or price/adjustment basis can be recorded for source-native observations, but
 model fitting needs a supported, evidenced price-basis manifest value; do not
@@ -71,8 +79,9 @@ pending entry supports a profitability or improvement claim.
    written model-use exception.
 2. Obtain reliable listing-currency evidence and record unknown feed details
    honestly. Confirm price-basis/adjustments before enabling learner intake.
-3. Obtain session, timestamp, close, adjustment and cost evidence before declaring
-   eToro compatible with another feed. Keep research protocols frozen.
+3. Obtain session alignment, timestamp meaning, close, adjustment and cost
+   evidence before declaring eToro compatible with another feed. Keep research
+   protocols frozen.
 4. Before FMP/Kibot reuse, verify their separate active subscription/retention
    attestations and preserve immutable dated input versions.
 5. Score pending forward evidence only after genuinely later approved data arrives.

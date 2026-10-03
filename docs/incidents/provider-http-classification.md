@@ -2,6 +2,11 @@
 
 Status: corrected before the rebuilt patch was integrated.
 
+Current status (2026-10-03): the historical search-type blocker below is
+superseded by instruments/type metadata lookup. The standing customer rights
+attestation is separate from the API contract's silence on retention/model-use.
+See [the current support record](../feed-collection.md#support-confirmed-metadata-repair-2026-10-03).
+
 ## What happened
 
 On 2026-09-14, the separately authorized, read-only eToro instrument metadata

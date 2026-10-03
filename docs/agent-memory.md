@@ -1,5 +1,14 @@
 # Money-maker-3000 Agent Memory
 
+- 2026-10-03 support clarification: search type fields may be omitted; use exact
+  provider symbols and instruments -> instrumentTypeID -> instrument-types.
+  Equal duplicate instrumentId keys identify one instrument; omit that redundant
+  search projection and retain strict parsing. Rates date is ISO 8601 UTC; candle
+  fromDate is ISO 8601 interval start, not exchange-session proof. API contract
+  silence on currency/session/price basis/adjustments/history retention/model-use
+  permissions does not revoke standing customer-attested rights. No rates route
+  or new provider call was added. See `docs/feed-collection.md` support record.
+
 - 2026-10-03 research consolidation: six retained offline research commits are
   reviewed together with current collector rights. Source withdrawal/restoration,
   semantic replay and sealed portability checks remain fail closed. Local-only

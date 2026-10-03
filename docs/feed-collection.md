@@ -74,8 +74,9 @@ instruments. An absent instrument allows other symbols to continue.
 
 [Instrument search](https://api-portal.etoro.com/api-reference/market-data/search-for-instruments)
 resolves exact symbols (`SPY`, `QQQ`, `VAS.ASX`) and checks the expected fund-name
-terms, ETF type, and nonempty exchange. VAS aliases are not guessed. Currency is
-an expected listing attribute, **not verified by the search response**. Storage
+terms and nonempty exchange; ETF type comes from the display/type metadata
+endpoints described below. VAS aliases are not guessed. Currency is
+an expected listing attribute, **not verified by these API responses**. Storage
 requires a separately reviewed currency interpretation. The immutable version
 records the exact resolved instrument mapping alongside interpretation.
 
@@ -178,10 +179,10 @@ by the search response. The corrected search produced a unique SPY match with
 an ID, display name, and exchange, but no `instrumentType`. The official
 [search schema](https://api-portal.etoro.com/api-reference/market-data/search-for-instruments)
 documents `instrumentType` as a string in the response schema. The missing
-runtime field is therefore an unresolved documentation/runtime discrepancy, not
-evidence that the instrument is an ETF. The collector remains fail-closed at
+runtime field was then an unresolved documentation/runtime discrepancy, not
+evidence that the instrument is an ETF. The collector then stopped at
 `instrument-type-or-exchange-unverified` and does not infer a type from name or
-exchange.
+exchange. This historical type blocker is superseded by the metadata repair below.
 
 This was metadata-only: no request IDs, raw data, price history, or account data
 were retained. It does not establish rights for retention or model use, research
@@ -200,9 +201,10 @@ or request ID was retained.
 
 This evidence does not settle timestamp meaning, exchange-session boundaries,
 close or price basis, corporate-action adjustment, or costs. It does not resolve
-the missing documented type fields or make semantic intake, retention, research,
-prediction, or portability eligible. The existing type, rights, and model-use
-gates remain fail-closed.
+the missing documented type fields or by itself establish semantic intake,
+retention, research, prediction, or portability eligibility. Those historical
+type/rights blockers are superseded by the support-confirmed metadata lookup
+and standing customer authorization; data-meaning checks remain.
 
 Focused synthetic tests cover nullable fields, malformed ranges/numbers,
 uncompleted candles, duplicates/conflicts, source mismatch, rights expiry,
@@ -271,15 +273,48 @@ An explicit reviewed migration is required before reusing such a store.
 
 ## Support-confirmed metadata repair (2026-10-03)
 
-Support reproduced omitted search type fields and duplicate explicitly requested
-`instrumentId`. Search requests omit that redundant ID field and select only an
-exact `internalSymbolFull` match. ETF verification now reads
-`/market-data/instruments?instrumentIds=<id>` (`instrumentDisplayDatas`,
+The account holder supplied an eToro support reply on 2026-10-03; the reply's
+sender date is not supplied. This section paraphrases that evidence, rather than
+claiming a new authenticated provider probe. The official MCP catalog and route
+schemas API v1.383.0 / skill v1.21.0 were checked on 2026-10-03 without executing
+provider requests.
+
+Support reproduced omission of both `instrumentType` and `instrumentTypeID`
+from search even when requested. It also reproduced duplicated explicitly
+requested `instrumentId`: equal occurrences identify the same instrument,
+not two instruments. Search requests omit that redundant ID projection and
+select one exact `internalSymbolFull` match; `SPY.RTH` and `SPY5.L` cannot
+substitute for `SPY`. Our strict JSON parser continues to reject duplicate keys
+if received; the support reply does not require weakening that parser.
+
+ETF verification reads
+`GET /api/v1/market-data/instruments?instrumentIds=<id>` (`instrumentDisplayDatas`,
 `instrumentID`, `symbolFull`, `instrumentTypeID`) and then
-`/market-data/instrument-types?instrumentTypeIds=<type>` (`instrumentTypes`,
-`instrumentTypeID`, `instrumentTypeDescription`). Official MCP route schemas
-v1.383.0 were checked on 2026-10-03. IDs and single unambiguous matches are
-validated; type 6 is not hardcoded. No rates/account/execution route was added.
+`GET /api/v1/market-data/instrument-types?instrumentTypeIds=<type>` (`instrumentTypes`,
+`instrumentTypeID`, `instrumentTypeDescription`). Support's example is SPY,
+instrument 3000, type 6 mapping to ETF. These numbers are examples, not hardcoded
+identity/type rules. The optional type filter is documented by the current route
+specification; support lists the unfiltered instrument-types endpoint. IDs and
+single unambiguous matches are validated.
+
+For current rates support identifies
+`GET /api/v1/market-data/instruments/rates?instrumentIds=<id>` with `bid`, `ask`,
+`lastExecution`, and `date`; `date` is ISO 8601 UTC. This daily-history collector
+does not need a rates route, so its allowlist stays unchanged. Historical candles
+use `GET /api/v1/market-data/instruments/{instrumentId}/history/candles/{direction}/{interval}/{candlesCount}`.
+Support confirms ISO 8601 candle timestamps; the current candle schema describes
+`fromDate` as interval start. ISO format and UTC normalization do not establish
+an exchange calendar, daily close, or identical session boundaries.
+
+Support states that the Public API contract does not define listing currency,
+session-calendar convention, a separate price-basis flag, corporate-action
+adjustment methodology, historical-data retention period, or separate
+retention/model-use permissions. This is contract silence, not a provider rights
+grant or revocation. The existing customer-attested rights record remains in
+force. Do not invent a history depth or retention expiry from the 1,000-candle
+request cap or the observed available window. Metadata `priceSource` and rates
+`conversionRateBid`/`conversionRateAsk` do not supply the missing listing-currency
+or adjustment/price-basis evidence.
 
 Currency still needs separate reliable listing evidence matching the selected
 instrument; the API mapping's currency-pending label describes API evidence,

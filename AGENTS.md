@@ -105,3 +105,10 @@ customer-attestation, not a provider-written exception; no expiry is invented.
 See `docs/feed-collection.md`. Inactive/revoked rights or provider deletion requests
 block use. The separate collector-only API scope and simulation/account/execution
 boundaries above remain in force. Data interpretation must remain evidence-based.
+
+The eToro support reply supplied 2026-10-03 confirms reliable instrument type
+lookup through instruments/type metadata and exact `internalSymbolFull` identity.
+It leaves listing currency, sessions, price basis, adjustments, retention duration
+and separate model-use permissions undefined in the API contract. Preserve the
+customer attestation above; do not treat that contract silence as revocation or
+invent feed semantics. See the support record in `docs/feed-collection.md`.

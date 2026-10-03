@@ -9,6 +9,15 @@ not claim a provider-written exception. See [the canonical customer policy and
 remaining data-meaning constraints](feed-collection.md). Inactivity, revocation and provider
 requests block use; account/execution/write boundaries remain unchanged.
 
+The [support reply supplied on 2026-10-03](feed-collection.md#support-confirmed-metadata-repair-2026-10-03)
+confirms omitted search type fields and recommends display/type lookup. Equal
+duplicate search IDs mean one instrument; requests avoid the redundant projection
+and the JSON parser remains strict. Exact provider symbols are required. Rates
+`date` is ISO 8601 UTC; candle timestamps are ISO 8601 interval-start evidence,
+not session-calendar evidence. The Public API contract does not define listing
+currency, price basis, corporate-action adjustments, session conventions, history
+retention duration, or separate retention/model-use permission. This contract
+silence does not replace or revoke the standing customer authorization.
 
 
 This workflow evaluates forecast probabilities and strategy states. It cannot
@@ -210,9 +219,10 @@ provider transport controls.
 
 `market-observations.v2` stores a candle's normalized UTC instant and derived
 UTC date. It does not preserve the original `fromDate` text or its UTC offset.
-Consequently, the original source timestamp convention, exchange session
-mapping, close definition, adjustment treatment, and cost treatment remain
-unresolved until future provider provenance supplies them. This collector cannot
+Consequently, original source timestamp text/offset is unavailable from retained
+packets; support confirms ISO 8601 formatting without establishing exchange
+session mapping, close definition, adjustment treatment, or cost treatment. These
+remain unresolved until reviewed evidence supplies them. This collector cannot
 support an eToro semantic-portability verdict from timestamp normalization alone.
 
 Any future eToro comparison must retain the existing frozen strategy-specific

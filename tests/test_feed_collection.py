@@ -188,9 +188,41 @@ class FeedCollectionTests(unittest.TestCase):
             result=original(path,query)
             if path == '/market-data/search':
                 result['items'].append({'instrumentId':3001,'internalSymbolFull':'SPY.RTH'})
+                result['items'].append({'instrumentId':3002,'internalSymbolFull':'SPY5.L'})
             return result
         reader.get=get
         self.assertEqual(resolve_instrument(reader,'SPY')['instrumentType'],'ETF')
+
+    def test_search_type_hints_do_not_override_authoritative_mapping(self):
+        reader=FakeReader(); original=reader.get
+        def get(path, query=None):
+            result=original(path,query)
+            if path == '/market-data/search':
+                result['items'][0].update(instrumentType='CFD',instrumentTypeID=99)
+            elif path == '/market-data/instruments':
+                result['instrumentDisplayDatas'][0].update(instrumentTypeID=17,priceSource='synthetic-source')
+            elif path == '/market-data/instrument-types':
+                result['instrumentTypes'][0]['instrumentTypeID']=17
+            return result
+        reader.get=get
+        mapping=resolve_instrument(reader,'SPY')
+        self.assertEqual(mapping['instrumentType'],'ETF')
+        self.assertEqual(reader.calls[-1],('/market-data/instrument-types',{'instrumentTypeIds':17}))
+        self.assertEqual(mapping['currencyVerification'],'expected-listing-currency-not-returned-by-api')
+        self.assertNotIn('priceBasis',mapping)
+
+    def test_equal_and_conflicting_duplicate_search_ids_remain_invalid_json(self):
+        class Response(io.BytesIO):
+            headers = {}
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'profile';path.write_text('ETORO_API_KEY=synthetic\nETORO_USER_KEY=synthetic\n');path.chmod(0o600)
+            for second_id in (1,2):
+                reader=EtoroReader(path)
+                body=(' {"items":[{"instrumentId":1,"instrumentId":%d}]}' % second_id).encode()
+                with self.subTest(second_id=second_id), patch.object(reader._opener,'open',return_value=Response(body)):
+                    with self.assertRaisesRegex(CollectionError,'^duplicate-json-key$'):
+                        resolve_instrument(reader,'SPY')
+                self.assertEqual(reader.request_count,1)
 
     def test_metadata_mismatch_malformed_and_non_etf_fail_closed(self):
         for path, replacement in [
