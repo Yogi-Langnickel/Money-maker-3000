@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from money_maker_3000.learning import (
-    BOUNDARY, LearningError, _canonical, _digest, _fit, _state, candidate_grid,
+    BOUNDARY, LearningError, _canonical, _digest, _fit, _score, _state, candidate_grid,
     load_artifact, load_dataset, predict, train, validate_artifact, write_artifact,
 )
 
@@ -108,6 +108,14 @@ class LearningTests(unittest.TestCase):
         unseen = _fit(["trend-confirmed"] * 20, [0] * 20, "slow-trend-allocation")
         self.assertEqual(unseen["states"]["trend-not-confirmed"]["support"], 0)
         self.assertEqual(unseen["states"]["trend-not-confirmed"]["probabilityUp"], 1 / 22)
+
+    def test_score_requires_one_finite_probability_for_each_binary_label(self):
+        self.assertEqual(_score([0.25, 0.75], [0, 1]), 0.0625)
+        for probabilities, labels in (([0.25], [0, 1]), ([], []), ([float("nan")], [0]),
+                                      ([0.25], [True]), ([1.1], [1])):
+            with self.subTest(probabilities=probabilities, labels=labels):
+                with self.assertRaisesRegex(LearningError, "invalid-learning-score-input"):
+                    _score(probabilities, labels)
 
     def test_holdout_changes_never_change_fit_or_selection(self):
         before = self.fit()

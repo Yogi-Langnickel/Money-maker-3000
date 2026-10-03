@@ -264,7 +264,10 @@ GitHub Actions runs the same compile and standard-library test gates on Python
   any future side effect must atomically recheck holder, idempotency key, epoch,
   fence, expiry, and kill-switch state while holding the lease lock.
 - No real PnL, win-rate, Sharpe, drawdown, execution quality, profitability
-  claims, provider calls, or account-linked persistence.
+  claims, provider calls, or account-linked persistence. The narrowly separate
+  [Instrument Profit Hypothesis Research v1](docs/instrument-profit-hypothesis-research-v1.md)
+  can emit explicitly labelled offline simulated-P&L diagnostics from local
+  candles; it cannot imply empirical or future profitability.
 
 ## Safety Defaults
 
@@ -280,6 +283,7 @@ GitHub Actions runs the same compile and standard-library test gates on Python
 Configured continuous research is documented in
 [the frozen research protocol](docs/continuous-research-protocol.md). It adds
 `research-cycle`, `research-status`, and `research-replay` commands, immutable
-five-observation forecasts, correction-aware scoring, and strategy-specific
-portability evidence. It remains local research without orders or profitability
-claims. Private inputs, source rights, and forward outcomes are separate gates.
+five-observation forecasts, correction-aware scoring, semantic read-only replay,
+and sealed strategy-specific portability evidence. It remains local research
+without orders or profitability claims. Private inputs, source rights, and
+forward outcomes are separate gates.

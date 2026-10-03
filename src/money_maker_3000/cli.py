@@ -34,6 +34,8 @@ from money_maker_3000.readiness import (
     build_backtest_readiness_report,
 )
 from money_maker_3000.worker_leases import build_worker_lease_report
+from money_maker_3000 import learning as _learning
+from money_maker_3000 import profit_hypothesis as _profit_hypothesis
 
 
 def _parse_started_at(raw: str | None) -> datetime:
@@ -218,7 +220,33 @@ def _build_parser() -> argparse.ArgumentParser:
         research = subparsers.add_parser(name, help='configured local strategy research workflow')
         research.add_argument('--config',required=True,type=Path)
         research.add_argument('--allow-synthetic-smoke',action='store_true')
+    hypothesis = subparsers.add_parser("profit-hypothesis", help="run the offline instrument simulated-profit research workflow")
+    hypothesis.add_argument("--config", required=True, type=Path, help="local strict candle/hypothesis JSON")
+    hypothesis.add_argument("--evidence-root", type=Path, help="private append-only artifact directory")
+    hypothesis.add_argument("--allow-synthetic-smoke", action="store_true", help="required for labelled synthetic mechanics evidence")
+    retest = subparsers.add_parser("profit-hypothesis-retest", help="frozen-rule offline cross-instrument retest")
+    retest.add_argument("--report", required=True, type=Path)
+    retest.add_argument("--config", required=True, type=Path)
+    retest.add_argument("--evidence-root", type=Path)
+    retest.add_argument("--allow-synthetic-smoke", action="store_true")
+    replay = subparsers.add_parser("profit-hypothesis-replay", help="read-only deterministic replay of a frozen hypothesis report")
+    replay.add_argument("--report", required=True, type=Path)
+    replay.add_argument("--config", required=True, type=Path)
+    replay.add_argument("--evidence-root", required=True, type=Path)
+    replay.add_argument("--allow-synthetic-smoke", action="store_true")
     return parser
+
+
+def run_profit_hypothesis(args: argparse.Namespace) -> dict[str, Any]:
+    """The workflow only reads caller-provided local JSON; it never collects data."""
+    config = _learning._json(_learning._read(args.config, _learning.MAX_JSON_BYTES))
+    if args.command == "profit-hypothesis-retest":
+        report = _learning._json(_learning._read(args.report, 8 * 1024 * 1024))
+        return _profit_hypothesis.frozen_retest(report, config, evidence_root=args.evidence_root, allow_synthetic_smoke=args.allow_synthetic_smoke)
+    if args.command == "profit-hypothesis-replay":
+        report = _learning._json(_learning._read(args.report, 8 * 1024 * 1024))
+        return _profit_hypothesis.replay(report, config, evidence_root=args.evidence_root, allow_synthetic_smoke=args.allow_synthetic_smoke)
+    return _profit_hypothesis.run(config, evidence_root=args.evidence_root, allow_synthetic_smoke=args.allow_synthetic_smoke)
 
 
 def run_backtest(args: argparse.Namespace) -> dict[str, Any]:
@@ -536,6 +564,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command.startswith("research-"):
             from money_maker_3000.research_cycle_cli import coordinate
             result = coordinate(args.config, mode=args.command.removeprefix('research-'), allow_synthetic=args.allow_synthetic_smoke)
+        elif args.command.startswith("profit-hypothesis"):
+            result = _run_with_optional_profile(args.profile, lambda: run_profit_hypothesis(args))
         elif args.command.startswith("learning-"):
             result = run_learning_command(args)
         elif args.command.startswith("operations-"):

@@ -1,5 +1,14 @@
 # Money-maker-3000 Agent Memory
 
+- 2026-10-03 research consolidation: six retained offline research commits are
+  reviewed together with current collector rights. Source withdrawal/restoration,
+  semantic replay and sealed portability checks remain fail closed. Local-only
+  hypothesis and signal-toolkit commands produce labelled simulated diagnostics;
+  no provider/credential/account/execution path is introduced. RSI/ATR labels
+  explicitly describe simple averages. Numeric overflow and adjustment mismatch
+  reject cleanly; failed input artifacts retain safe scope only, with no rejected
+  dataset hash. See `docs/reviews/2026-10-03-research-consolidation.md`.
+
 - 2026-10-03: The customer confirms all rights needed for eToro storage/retention,
   private strategy research and model use while active. Carry forward without
   repeated permission requests. Use explicit customer-attestation retention policy

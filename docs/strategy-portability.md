@@ -6,8 +6,14 @@ learner's source identity check, or enables execution. The resulting verdict is
 specific to an instrument, feed pair, strategy family, selected parameters,
 comparison dates, and preset tolerances.
 
-Each private `feed-description.v1` records instrument identity, currency, session
+Each private `feed-description.v2` records instrument identity, currency, session
 boundaries, timestamps, price type, adjustments, costs, retention, and evidence.
+It also records a UTC `retrievedAt`, a digest of the exact normalized input series,
+and non-empty local retrieval evidence. The evaluator validates that each digest
+matches the supplied series, that neither retrieval time nor `as_of` is later than
+the injected actual UTC clock, and that `as_of` is no later than both retrieval
+dates. A caller-provided future `as_of` therefore cannot make a reserve appear
+complete.
 Each field is `verified`, `documented`, or `unresolved`; explanations are separately
 `documented`, `statistical-association`, or `unresolved`. An unresolved exact cause
 is not a rejection. Missing meaning needed for close-based features or labels
@@ -70,10 +76,18 @@ unpaired dates are counted, with preset maximum mismatch fractions. No missing
 dates are silently compressed into a common-calendar training series. The protocol
 also freezes `expectedLastObservation`, defaulting to the evaluation end date.
 A non-session end requires an explicitly supplied last session date and calendar
-evidence frozen with the protocol. Both feeds must contain that endpoint and the
-`as_of` date must reach the full evaluation end; otherwise the reserved period is
-incomplete and the verdict remains inconclusive, even when a truncated common
-prefix has enough samples. The report exposes expected and actual endpoints.
+evidence frozen with the protocol. Both feeds must contain that endpoint, `as_of`
+must reach the full evaluation end, and both retrieval timestamps must be on a
+later UTC date before the endpoint check is `complete`.
+
+V1 deliberately reports this as `reserveEndpointCoverage`, not interval coverage.
+It has no pinned, validated session/date calendar that can prove either feed
+contains every reserved session. `reserveIntervalCompleteness` is consequently
+always `unproven` with the reason
+`no-pinned-reserved-session-calendar-evidence`. A matching endpoint, a shared
+interior gap, and a one-sided interior gap all leave the portability verdict
+inconclusive. `supported` is unavailable until a separately reviewed protocol
+adds expected reserved-session coverage and validates it against both feeds.
 
 The report includes directional agreement, return differences, return correlation,
 fixed lags of minus two through plus two observations, price differences,
@@ -126,6 +140,9 @@ state before any later read or replay; do not rely on the old report's attestati
 Local generated reports and replay scripts belong under ignored `data/private/`.
 No observed FMP values, data digests, fitted models, or mixed evidence are included
 in Git. Private reports record unavailable pair/strategy combinations explicitly.
+Completed reports are sealed with a SHA-256 over their complete payload. Readers
+verify the seal, the two unique descriptor sources, stored retention attestations,
+and current retention attestations before reusing any verdict.
 Cross-provider agreement supports robustness to the data source because the feeds
 observe the same market events. Predictive confirmation requires the separate
 forward journal and genuinely new, matured observations.

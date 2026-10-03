@@ -1,4 +1,5 @@
 """Synthetic contract tests; no observed-market or predictive evidence."""
+import copy
 import hashlib
 import json
 import math
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from money_maker_3000 import learning as L
 from money_maker_3000 import research_cycle as R
 from money_maker_3000 import forward_evaluation as F
+from money_maker_3000 import signal_toolkit as S
 from money_maker_3000.market_history import Bar
 
 
@@ -112,6 +114,106 @@ class ResearchCycleTests(unittest.TestCase):
         self.assertEqual(len(result['payload']['candidates']),9)
         self.assertEqual(result['payload']['models'],[])
 
+    def test_semantic_replay_binds_imported_incumbent_provenance_and_context(self):
+        predecessor = self.experiment()
+        incumbent_id = next(reference['id'] for reference in predecessor['payload']['models'] if reference['role'] == 'incumbent')
+        incumbent = next(record['payload'] for record in self.store.records('model') if record['id'] == incumbent_id)
+        protocol = R.freeze_protocol(self.bars,self.manifest,'volatility-band-accumulator',RETENTION,INTERPRETATION,
+                                     created_at='2026-09-13T00:00:00Z',incumbent_model=incumbent)
+        experiment = R.run_experiment(self.store,self.bars,protocol,incumbent=incumbent)
+        with patch.object(self.store,'locked',wraps=self.store.locked) as locked:
+            self.assertEqual(R.semantic_replay(self.store,self.bars,self.manifest,experiment,retention=RETENTION)['semanticReplay'],'verified')
+        locked.assert_called_once_with(read_only=True)
+        self.assertEqual(len(experiment['payload']['models']),len({reference['id'] for reference in experiment['payload']['models']}))
+        imported = experiment['payload']['models'][0]
+        substitute = dict(next(record['payload'] for record in self.store.records('model') if record['id'] == imported['id']))
+        substitute['trainingDatasetSha256'] = 'a'*64
+        alternate = self.store.put('model',substitute)
+        replaced = copy.deepcopy(experiment)
+        replaced['payload']['models'][0]['id'] = alternate['id']
+        with self.assertRaisesRegex(L.LearningError,'invalid-semantic-replay-experiment'):
+            R.semantic_replay(self.store,self.bars,self.manifest,replaced,retention=RETENTION)
+        wrong_context = copy.deepcopy(experiment)
+        wrong_context['payload']['existingIncumbentContext'] = 'unavailable'
+        with self.assertRaisesRegex(L.LearningError,'invalid-semantic-replay-experiment'):
+            R.semantic_replay(self.store,self.bars,self.manifest,wrong_context,retention=RETENTION)
+        detached = copy.deepcopy(experiment)
+        detached['id'] = L._digest(detached['payload'])
+        detached['payload']['reason'] = 'detached-but-plausible'
+        detached['id'] = L._digest(detached['payload'])
+        with self.assertRaisesRegex(L.LearningError,'experiment-not-durable'):
+            R.semantic_replay(self.store,self.bars,self.manifest,detached,retention=RETENTION)
+        # A well-formed but unreferenced model under the sealed protocol cannot
+        # be silently ignored by a replay claim.
+        extra = copy.deepcopy(next(record['payload'] for record in self.store.records('model')
+                                   if record['payload']['protocolId'] == experiment['payload']['protocolId']
+                                   and record['id'] != imported['id']))
+        extra['parameters'] = R.L.candidate_grid(extra['strategy'])[-1]
+        self.store.put('model',extra)
+        with self.assertRaisesRegex(L.LearningError,'store-model-membership-mismatch'):
+            R.semantic_replay(self.store,self.bars,self.manifest,experiment,retention=RETENTION)
+
+    def test_toolkit_bound_predecessor_replays_as_a_legacy_successor(self):
+        signal = {'ohlcAttested': False, 'ohlcBasis': None,
+                  'completedAt': self.bars[-1].date + 'T00:00:00Z',
+                  'availableAt': self.bars[-1].date + 'T00:00:00Z'}
+        bound_protocol = R.freeze_protocol(self.bars, self.manifest, 'volatility-band-accumulator', RETENTION, INTERPRETATION,
+                                            created_at='2026-09-12T00:00:00Z', signal_toolkit=signal)
+        bound_experiment = R.run_experiment(self.store, self.bars, bound_protocol)
+        bound_id = next(reference['id'] for reference in bound_experiment['payload']['models'] if reference['role'] == 'incumbent')
+        bound = next(record['payload'] for record in self.store.records('model') if record['id'] == bound_id)
+        self.assertIn('signalFeatureBundleSha256', bound)
+        legacy_protocol = R.freeze_protocol(self.bars, self.manifest, 'volatility-band-accumulator', RETENTION, INTERPRETATION,
+                                            created_at='2026-09-13T00:00:00Z', incumbent_model=bound)
+        legacy = R.run_experiment(self.store, self.bars, legacy_protocol, incumbent=bound)
+        imported_id = legacy['payload']['models'][0]['id']
+        imported = next(record['payload'] for record in self.store.records('model') if record['id'] == imported_id)
+        self.assertNotIn('signalFeatureBundleSha256', imported)
+        self.assertEqual(R.semantic_replay(self.store, self.bars, self.manifest, legacy, retention=RETENTION)['semanticReplay'], 'verified')
+
+    def test_semantic_replay_rejects_self_consistent_mutated_cutoffs_and_reserve(self):
+        """Recomputed dependent records cannot make a different partition canonical."""
+        store = R.EvidenceStore(Path(self.tmp.name) / 'mutated-evidence')
+        protocol = self.protocol()
+        protocol['developmentCutoffs'] = [self.bars[i].date for i in (210, 280, 350, 430)]
+        protocol['reservedStart'] = self.bars[431].date
+        frozen = store.put('protocol', protocol)
+        warmup = max(L._warmup(parameters) for parameters in protocol['candidates'])
+        cache, candidates = {}, []
+        for index, parameters in enumerate(protocol['candidates']):
+            windows = []
+            for train_end, evaluation_end in zip(protocol['developmentCutoffs'], protocol['developmentCutoffs'][1:]):
+                fit = R._fit_at(self.bars, protocol['strategy'], parameters, train_end, warmup, cache=cache)
+                indices = [i for i in range(warmup - 1, len(self.bars) - R.HORIZON)
+                           if train_end < self.bars[i].date and self.bars[i + R.HORIZON].date <= evaluation_end]
+                result, labels = R._evaluate(self.bars, indices, protocol['strategy'], parameters, fit, cache=cache)
+                windows.append({'trainEnd': train_end, 'evaluationFirst': self.bars[indices[0]].date,
+                                'evaluationLastLabel': self.bars[indices[-1] + R.HORIZON].date, **result,
+                                'baselineBrier': L._score([fit['priorProbabilityUp']] * len(labels), labels)})
+            candidates.append({'index': index, 'parameters': parameters, 'status': 'completed', 'windows': windows,
+                               'developmentBrier': sum(row['brier'] * row['count'] for row in windows)
+                               / sum(row['count'] for row in windows)})
+        ranking = sorted(candidates, key=lambda row: (row['developmentBrier'], row['index']))
+        reserved = [i for i in range(warmup - 1, len(self.bars) - R.HORIZON)
+                    if self.bars[i].date >= protocol['reservedStart']]
+        references = []
+        for index in list(dict.fromkeys([0] + [row['index'] for row in ranking[:2]])):
+            model, result, labels = R._frozen_candidate_model(
+                self.bars, self.manifest, {**protocol, '_id': frozen['id']}, index, warmup, reserved, cache=cache)
+            saved = store.put('model', model)
+            references.append({'id': saved['id'], 'candidateIndex': index,
+                               'role': 'incumbent' if index == 0 else 'challenger', 'reservedMetrics': result,
+                               'baselineBrier': L._score([model['fit']['priorProbabilityUp']] * len(labels), labels)})
+        experiment = store.put('experiment', {
+            'version': R.VERSION, 'protocolId': frozen['id'], 'candidates': candidates, 'status': 'inconclusive',
+            'reason': 'historical-selection-awaits-genuine-forward-checkpoint', 'selectedCandidate': ranking[0]['index'],
+            'models': references, 'existingIncumbentMetrics': None, 'existingIncumbentContext': 'unavailable',
+            'evaluationContext': 'retrospective-known-history', 'boundary': dict(L.BOUNDARY)})
+        with store.locked():
+            pass
+        with self.assertRaisesRegex(L.LearningError, 'semantic-replay-protocol-mismatch'):
+            R.semantic_replay(store, self.bars, self.manifest, experiment, retention=RETENTION)
+
 
 class ForwardTests(unittest.TestCase):
     setUp = ResearchCycleTests.setUp
@@ -144,6 +246,25 @@ class ForwardTests(unittest.TestCase):
         self.assertEqual(F.score_matured(self.store,correction,manifest(correction),retention=RETENTION,retrieved_at=clock)['revised'],len(ids))
         self.assertEqual(F.score_matured(self.store,later,manifest(later),retention=RETENTION,retrieved_at=clock)['revised'],len(ids))
         self.assertTrue(all(r['payload']['evidenceType']=='historical-replay' for r in self.store.records('score')))
+    def test_status_counts_current_scores_separately_from_revisions_and_invalidated_features(self):
+        ids,_=self.prepare()
+        full=history(605)
+        F.score_matured(self.store,full,manifest(full),retention=RETENTION,retrieved_at='2026-09-12T12:00:00Z')
+        corrected=list(full)
+        corrected[-1]=replace(corrected[-1],close=corrected[-1].close*1.01)
+        F.score_matured(self.store,corrected,manifest(corrected),retention=RETENTION,retrieved_at='2026-09-12T13:00:00Z')
+        revised=F.status(self.store,source='synthetic-research',retention=RETENTION)
+        self.assertEqual(revised['scored'],len(ids))
+        self.assertEqual(revised['scoredHistoricalTotal'],2*len(ids))
+        self.assertEqual(revised['scoreRevisions'],len(ids))
+        feature_corrected=list(corrected)
+        feature_corrected[-6]=replace(feature_corrected[-6],close=feature_corrected[-6].close*1.01)
+        F.score_matured(self.store,feature_corrected,manifest(feature_corrected),retention=RETENTION,retrieved_at='2026-09-12T14:00:00Z')
+        status=F.status(self.store,source='synthetic-research',retention=RETENTION)
+        self.assertEqual(status['scoredHistoricalTotal'],3*len(ids))
+        self.assertEqual(status['currentlyFeatureRevised'],len(ids))
+        self.assertEqual(status['validScored'],0)
+        self.assertEqual(status['pending'],len(ids))
     def test_future_outcomes_rejected(self):
         self.prepare()
         with self.assertRaisesRegex(L.LearningError,'future-outcome'):
@@ -389,9 +510,13 @@ class WorkflowTests(unittest.TestCase):
             before={str(p):p.read_bytes() for p in (root/'store').rglob('*') if p.is_file()}
             stat=coordinate(path,mode='status',allow_synthetic=True)
             replay=coordinate(path,mode='replay',allow_synthetic=True)
+            replay_again=coordinate(path,mode='replay',allow_synthetic=True)
             after={str(p):p.read_bytes() for p in (root/'store').rglob('*') if p.is_file()}
             self.assertEqual(before,after)
             self.assertEqual(stat['status'],'complete');self.assertEqual(replay['status'],'complete')
+            self.assertEqual(replay,replay_again)
+            self.assertTrue(all(row['action']=='semantic-replay-verified-no-new-research' and row['semanticReplay']=='verified'
+                                for row in replay['results']))
             entry.update(source='fmp-eod',retention={'policy':R.FMP_POLICY,'subscriptionStatus':'expired','terminationDate':None})
             (root/'inventory.json').write_text(json.dumps(inventory))
             with patch.object(L,'load_dataset',side_effect=AssertionError('must not read expired source')):
@@ -420,13 +545,13 @@ class WorkflowTests(unittest.TestCase):
                 evaluation_start=left[351].date,evaluation_end=left[-1].date,created_at='2026-09-12T00:00:00Z')
             report=P.evaluate_pair(left,right,da,descriptor('kibot'),root/'protocol.json',as_of='2026-09-12')
             P.write_report(report,root/'report.json')
-            self.assertEqual(len(P.load_report(root/'report.json',current_retentions={'fmp-eod':active,'kibot':RETENTION})['strategies']),2)
+            self.assertEqual(len(P.load_report(root/'report.json',protocol_path=root/'protocol.json',current_retentions={'fmp-eod':active,'kibot':RETENTION})['strategies']),2)
             entries=[{'source':source,'symbol':symbol,'retention':policy,'csvPath':'unused.csv','manifestPath':'unused.json'}
                      for source,symbol,policy in [('fmp-eod','SPY',expired),('fmp-eod','QQQ',active),('kibot','SPY',RETENTION)]]
             (root/'inventory.json').write_text(json.dumps({'version':'money-maker-learning-inventory.v1','datasets':entries}))
             config={'version':'continuous-research-config.v1','dataRoot':str(root),'storeRoot':str(root/'store'),
                 'inventoryPath':'inventory.json','interpretations':{},'existingModels':{},'availability':{},'collection':None,
-                'portability':{'reportPath':str(root/'report.json'),'reportSources':['fmp-eod','kibot']}}
+                'portability':{'protocolPath':str(root/'protocol.json'),'reportPath':str(root/'report.json'),'reportSources':['fmp-eod','kibot']}}
             (root/'config.json').write_text(json.dumps(config))
             with patch.object(P,'load_report',side_effect=AssertionError('must not read report with conflicting source rights')):
                 result=coordinate(root/'config.json',mode='status')
