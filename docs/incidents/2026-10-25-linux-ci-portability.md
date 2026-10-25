@@ -1,7 +1,7 @@
 # Incident Review: macOS Temporary Paths Broke Ubuntu CI
 
 Date: 2026-10-25
-Status: draft
+Status: closed
 Severity: high
 Type: test-portability and review-gate
 
@@ -83,6 +83,15 @@ and `Python 3.13` jobs. The final delivery report records that SHA, run URL and
 job conclusions; this static review does not predict a future run result or
 retroactively change historical runs. A green repair run proves that revision's
 checks passed, not that all business behavior is correct.
+
+Closure review on 2026-10-25 verified repair commit
+`3dd89d749ee65f027bbe307dd3f2c822a197075e` against
+[Ubuntu CI run 40188373879](https://github.com/Yogi-Langnickel/Money-maker-3000/actions/runs/40188373879).
+All three required Python jobs completed successfully, including compilation,
+the full test steps, generated-contract checks and fixture-provenance checks.
+This is observed evidence for that repair SHA; the historical red runs remain
+unchanged. Subsequent published revisions still require their own exact-SHA CI
+success before final delivery is complete.
 
 ## Prevention and transferability
 
