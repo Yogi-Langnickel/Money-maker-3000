@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "workflow": ".github/workflows/ci.yml",
+  "branch": "develop",
+  "event": "push",
+  "jobs": [
+    "Python 3.11",
+    "Python 3.12",
+    "Python 3.13"
+  ]
+}

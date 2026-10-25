@@ -46,7 +46,22 @@ backtest behavior, market-history parsing, ledger output, or docs examples:
 ```sh
 PYTHONPYCACHEPREFIX=.pycache python3.13 -m compileall src tests
 PYTHONPATH=src python3.13 -m unittest discover tests
+PYTHONPATH=src python3.13 -m money_maker_3000.contract_manifest --check
+PYTHONPATH=src python3.13 -m money_maker_3000.fixture_provenance --check
 ```
+
+Before reporting published `develop` delivery complete, verify the live remote
+SHA and its completed, successful GitHub Actions push run for
+`.github/workflows/ci.yml`. All three declared Ubuntu jobs (`Python 3.11`,
+`Python 3.12`, `Python 3.13`) must succeed. Missing, pending, failed, cancelled or
+unknown CI evidence blocks completion. A local test pass or successful push does
+not satisfy this gate.
+
+The canonical workspace closeout reads `.github/closeout-ci.json` from the
+validated committed `develop` SHA and automatically enforces that workflow,
+branch, event and job set, including linked worktrees. No optional CI flag is
+needed. Report the run URL, exact SHA and matrix results separately from local
+validation. See [the portability incident review](docs/incidents/2026-10-25-linux-ci-portability.md).
 
 ## Memory
 

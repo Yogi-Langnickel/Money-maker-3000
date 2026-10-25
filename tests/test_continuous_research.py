@@ -23,6 +23,33 @@ INTERPRETATION = {'instrumentVerified':True,'trainingPermitted':True,'currency':
 RETENTION = {'policy':'source-terms'}
 
 
+def private_test_directory():
+    # EvidenceStore rejects symlink ancestors; the system temp base can be an
+    # alias (for example on macOS). Canonicalize it without assuming an OS path.
+    return tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
+
+
+class TemporaryDirectoryTests(unittest.TestCase):
+    def test_custom_and_symlinked_temp_bases_support_private_evidence(self):
+        with private_test_directory() as outer:
+            base=Path(outer)/'custom-temp';base.mkdir(mode=0o700)
+            alias=Path(outer)/'temp-alias';alias.symlink_to(base,target_is_directory=True)
+            for configured_base in (base,alias):
+                with self.subTest(base=configured_base.name):
+                    with patch.object(tempfile,'gettempdir',return_value=str(configured_base)):
+                        with private_test_directory() as folder:
+                            root=Path(folder)
+                            self.assertEqual(root.parent,base.resolve())
+                            self.assertEqual(root.stat().st_mode & 0o777,0o700)
+                            store=R.EvidenceStore(root/'evidence')
+                            with store.locked():
+                                record=store.put('reference',{'type':'portable-temp-test'})
+                                self.assertEqual(store.records('reference'),[record])
+                            self.assertEqual(store.root.stat().st_mode & 0o777,0o700)
+                            path=store.root/f"reference-{record['id']}.json"
+                            self.assertEqual(path.stat().st_mode & 0o777,0o600)
+
+
 def history(n=600):
     result=[]
     d=date(2020,1,1)
@@ -42,7 +69,7 @@ def manifest(bars):
 
 class ResearchCycleTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(dir='/private/tmp')
+        self.tmp=private_test_directory()
         self.store=R.EvidenceStore(Path(self.tmp.name)/'evidence')
         self.bars=history()
         self.manifest=manifest(self.bars)
@@ -465,7 +492,7 @@ class CloseOnlyIntegrationTests(unittest.TestCase):
         from test_feed_collection import POLICY,MEANING
         from copy import deepcopy
         meaning=deepcopy(MEANING);meaning['priceBasis']='unadjusted'
-        with tempfile.TemporaryDirectory(dir='/private/tmp') as folder:
+        with private_test_directory() as folder:
             root=Path(folder)
             rows=[dict(date=b.date,timestamp=b.date+'T00:00:00Z',open=None,high=None,low=None,close=b.close,volume=None) for b in history()]
             retrieval=persist_version(root/'collection',symbol='SPY',observations=rows,interpretation=meaning,retention=POLICY,retrieved_at='2026-09-12T12:00:00Z')
@@ -487,7 +514,7 @@ class CloseOnlyIntegrationTests(unittest.TestCase):
 class WorkflowTests(unittest.TestCase):
     def test_cycle_status_replay_no_new_data_and_retention_block(self):
         from money_maker_3000.research_cycle_cli import coordinate
-        with tempfile.TemporaryDirectory(dir='/private/tmp') as folder:
+        with private_test_directory() as folder:
             root=Path(folder)
             bars=history()
             csv='symbol,date,open,high,low,close,volume,source\n'+''.join(','.join(map(str,(b.symbol,b.date,b.open,b.high,b.low,b.close,b.volume,b.source)))+'\n' for b in bars)
@@ -536,7 +563,7 @@ class WorkflowTests(unittest.TestCase):
         from money_maker_3000 import portability as P
         from money_maker_3000.research_cycle_cli import coordinate
         from test_portability import bars as port_bars,descriptor
-        with tempfile.TemporaryDirectory(dir='/private/tmp') as folder:
+        with private_test_directory() as folder:
             root=Path(folder);left=port_bars('fmp-eod');right=port_bars('kibot')
             active={'policy':R.FMP_POLICY,'subscriptionStatus':'active','terminationDate':None}
             expired=dict(active,subscriptionStatus='expired')

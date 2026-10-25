@@ -1,3 +1,12 @@
+# CI portability and completion evidence (2026-10-25)
+
+Research tests use a canonicalized system temporary base so private EvidenceStore
+checks work without a macOS-specific directory or symlink ancestors. Published
+completion requires the exact `develop` SHA's successful Ubuntu CI matrix;
+`.github/closeout-ci.json` declares the automatic workspace closeout gate. Local
+test counts and remote-SHA equality alone do not establish remote CI success.
+See [the incident review](incidents/2026-10-25-linux-ci-portability.md).
+
 # Autonomous economic and shadow research (2026-10-03)
 
 See [autonomous-profit-shadow-v1.md](autonomous-profit-shadow-v1.md) for the complete frozen pipeline, private schemas, fixed prospective comparison, lifetime alpha allocation, recovery and observed-input limitations. New modules autonomous_research/economic_portfolio/shadow_portfolio/autonomous_recovery/autonomous_cli retain stdlib-only offline simulations and collector isolation. Explicit autonomous-cycle configuration may invoke only the existing separate permitted read-only collector; status/replay/snapshot/restore never load credentials. Source-native unknown semantics are retained under current rights but do not qualify economic/model research. No provider balances size capital.
